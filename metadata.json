@@ -1,6 +1,6 @@
 {
   "name": "WACK Shell",
-  "description": "Unified macOS-style Logo Menu, App Menu, and Activities replacement for GNOME Shell. Part of the WACK Project.",
+  "description": "Brings the macOS-inspired panel experience to GNOME — logo menu, app menu, workspace widget, and dynamic panel color, living right where you'd expect them. Part of the WACK Project.",
   "uuid": "wack-shell@rinzler69-wastaken.github.com",
   "shell-version": [
     "45",
