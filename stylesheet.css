@@ -1,0 +1,25 @@
+.menu-button {
+  margin: 1px !important;
+  padding: 0px !important;
+}
+
+.activities-icon {
+  -st-icon-style: symbolic;
+}
+
+.activities-layout {
+  spacing: 6px;
+}
+
+/* Increase horizontal padding of the Logo Menu */
+.wack-logo-button {
+  padding-left: 20px !important;
+  padding-right: 20px !important;
+}
+
+/* Ensure labels inside our custom buttons follow panel text color */
+.wack-logo-button StLabel,
+.wack-workspace-button StLabel,
+.wack-app-menu-button StLabel {
+  color: inherit !important;
+}

@@ -1,0 +1,18 @@
+
+#panel.panel-proximity {
+    background-color: rgb(0, 0, 0) !important;
+    transition-duration: 250ms;
+}
+
+#panel.panel-proximity,
+#panel.panel-proximity *,
+#panel.panel-proximity .panel-button,
+#panel.panel-proximity .panel-button * {
+    color: rgb(240, 240, 240) !important;
+}
+
+#panel.panel-proximity .system-status-icon,
+#panel.panel-proximity .app-menu-icon,
+#panel.panel-proximity .popup-menu-arrow {
+    color: rgb(240, 240, 240) !important;
+}

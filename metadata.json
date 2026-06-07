@@ -1,0 +1,21 @@
+{
+  "name": "WACK Shell",
+  "description": "Unified macOS-style Logo Menu, App Menu, and Activities replacement for GNOME Shell. Part of the WACK Project.",
+  "uuid": "wack-shell@rinzler69-wastaken.github.com",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ],
+  "settings-schema": "org.gnome.shell.extensions.wack-shell",
+  "url": "https://github.com/rinzler69-wastaken/wack-shell",
+  "version-name": "1.0.0",
+  "donations": {
+    "paypal": "ArtFazil",
+    "kofi": "mikerinzler69",
+    "custom": "https://saweria.co/rinzler69"
+  }
+}

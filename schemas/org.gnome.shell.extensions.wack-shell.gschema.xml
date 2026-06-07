@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema path="/org/gnome/shell/extensions/wack-shell/" id="org.gnome.shell.extensions.wack-shell">
+    
+    <!-- Visibility Switches -->
+    <key type="b" name="show-logo-menu">
+      <default>true</default>
+      <summary>Show Logo Menu Button</summary>
+      <description>Toggle the visibility of the Logo Menu button in the top panel.</description>
+    </key>
+
+    <key type="b" name="show-app-menu">
+      <default>true</default>
+      <summary>Show App Menu Button</summary>
+      <description>Toggle the visibility of the active App Menu button in the top panel.</description>
+    </key>
+
+    <key type="b" name="show-workspace-widget">
+      <default>true</default>
+      <summary>Show Workspace Widget</summary>
+      <description>Toggle the visibility of the separate workspace indicators / Activities label widget.</description>
+    </key>
+
+    <key type="i" name="workspace-widget-type">
+      <default>0</default>
+      <summary>Workspace Widget Type</summary>
+      <description>Select what to display: 0 for Workspace Indicators (dots), 1 for Activities label.</description>
+    </key>
+
+    <key type="b" name="show-workspace-number">
+      <default>false</default>
+      <summary>Show Workspace Number</summary>
+      <description>Show workspace number next to Activities label when Activities button widget type is selected.</description>
+    </key>
+
+    <!-- Logo Button Customization -->
+    <key type="b" name="use-custom-logo">
+      <default>false</default>
+      <summary>Use Custom Logo</summary>
+      <description>Whether to use a custom image/icon path for the Logo button.</description>
+    </key>
+
+    <key type="s" name="custom-logo-path">
+      <default>""</default>
+      <summary>Custom Logo Path</summary>
+      <description>Absolute path to custom logo image file.</description>
+    </key>
+
+    <key type="i" name="logo-icon-image">
+      <default>0</default>
+      <summary>Pre-defined Logo Image</summary>
+      <description>Select pre-defined logo index (0: Wackintosh/Apple, 1: Fedora, 2: Debian, etc.).</description>
+    </key>
+
+    <key type="b" name="symbolic-logo">
+      <default>true</default>
+      <summary>Use Symbolic Icon</summary>
+      <description>Use symbolic version of pre-defined logo if available.</description>
+    </key>
+
+    <key type="i" name="logo-icon-size">
+      <default>18</default>
+      <summary>Logo Icon Size</summary>
+      <description>Size of the logo icon in pixels.</description>
+    </key>
+
+    <key type="b" name="show-logo-label">
+      <default>false</default>
+      <summary>Show Logo Label</summary>
+      <description>Show a custom text label next to the logo.</description>
+    </key>
+
+    <key type="s" name="logo-label-text">
+      <default>"Finder"</default>
+      <summary>Logo Label Text</summary>
+      <description>Custom label text next to the logo.</description>
+    </key>
+
+    <!-- Interactivity Options -->
+    <key type="i" name="logo-click-action">
+      <default>0</default>
+      <summary>Logo Left Click Action</summary>
+      <description>Action on left click: 0 for Open Menu, 1 for Toggle Overview.</description>
+    </key>
+
+    <key type="i" name="logo-middle-click-action">
+      <default>1</default>
+      <summary>Logo Middle Click Action</summary>
+      <description>Action on middle click: 0 for Open Menu, 1 for Toggle Overview.</description>
+    </key>
+
+    <key type="b" name="desktop-scroll">
+      <default>true</default>
+      <summary>Scroll to Switch Workspaces</summary>
+      <description>Allow scrolling mouse wheel over Logo button to switch workspaces.</description>
+    </key>
+
+    <!-- Menu Item Switches -->
+    <key type="b" name="show-power-options">
+      <default>true</default>
+      <summary>Show Power Options</summary>
+      <description>Show Sleep, Restart, Shut Down options in the Logo Menu.</description>
+    </key>
+
+    <key type="b" name="show-lockscreen">
+      <default>true</default>
+      <summary>Show Lock Screen Option</summary>
+      <description>Show Lock Screen option in the Logo Menu.</description>
+    </key>
+
+    <key type="b" name="hide-forcequit">
+      <default>false</default>
+      <summary>Hide Force Quit Option</summary>
+      <description>Hide the Force Quit utility option in the Logo Menu.</description>
+    </key>
+
+    <key type="b" name="hide-softwarecentre">
+      <default>false</default>
+      <summary>Hide Software Center Option</summary>
+      <description>Hide the Software Center option in the Logo Menu.</description>
+    </key>
+
+    <!-- External Apps -->
+    <key type="s" name="menu-button-terminal">
+      <default>"gnome-terminal"</default>
+      <summary>Terminal Application Command</summary>
+    </key>
+
+    <key type="s" name="menu-button-software-center">
+      <default>"gnome-software"</default>
+      <summary>Software Center Application Command</summary>
+    </key>
+
+    <key type="s" name="menu-button-system-monitor">
+      <default>"gnome-system-monitor"</default>
+      <summary>System Monitor Application Command</summary>
+    </key>
+
+    <key type="s" name="menu-button-extensions-app">
+      <default>"org.gnome.Extensions.desktop"</default>
+      <summary>Extensions App desktop file ID</summary>
+    </key>
+
+    <key type="b" name="enable-panel-proximity">
+      <default>true</default>
+      <summary>Enable Panel Proximity Coloring</summary>
+    </key>
+
+    <key type="s" name="dark-bg-color">
+      <default>'rgb(0, 0, 0)'</default>
+      <summary>Custom dark mode background color</summary>
+    </key>
+
+    <key type="s" name="dark-fg-color">
+      <default>'rgb(240, 240, 240)'</default>
+      <summary>Custom dark mode foreground color</summary>
+    </key>
+
+    <key type="s" name="light-bg-color">
+      <default>'rgb(250, 250, 250)'</default>
+      <summary>Custom light mode background color</summary>
+    </key>
+
+    <key type="s" name="light-fg-color">
+      <default>'rgb(0, 0, 0)'</default>
+      <summary>Custom light mode foreground color</summary>
+    </key>
+
+    <key type="b" name="colored-app-menu-icon">
+      <default>false</default>
+      <summary>Colored App Menu Icon</summary>
+      <description>Show the active application icon in color rather than monochrome.</description>
+    </key>
+    
+  </schema>
+</schemalist>
