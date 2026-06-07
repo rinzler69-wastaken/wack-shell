@@ -47,7 +47,7 @@ Developed and tested on GNOME 46 and 49 (Fedora/Nobara). GNOME 47–48 are untes
 WACK (WACK Ain't Cupertino, Kid) brings the best design patterns from macOS to the GNOME desktop — dock animations, traffic-light window controls, lockscreen layout, panel elements, and more — built entirely within what GNOME already gives you.
 
 Other extensions in the suite:
-- **[WACK Lockscreen Clock](https://extensions.gnome.org/extension/TODO)** — macOS Sonoma-style lockscreen clock
+- **[WACK Sonoma Lockscreen](https://github.com/rinzler69-wastaken/wack-sonoma-lockscreen)** — macOS Sonoma-style lockscreen clock
 - **[Cupertino Dock Lite](https://github.com/rinzler69-wastaken/cupertino-dock-lite)** — macOS-inspired dock theming and bounce animations
 
 ## Credits
