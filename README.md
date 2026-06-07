@@ -59,5 +59,3 @@ WACK Shell combines and builds upon the work of several talented extension autho
 | Logo Menu Button | [Logo Menu](https://github.com/Aryan20/Logomenu) | [Aryan Kaushik](https://github.com/Aryan20) |
 | Activities Button & Workspace Dots | [Logo Activities](https://github.com/howbea/logo-activities) | [Howbea](https://github.com/howbea) |
 | App Menu Button | [App Menu is Back](https://github.com/fthx/appmenu-is-back) | [fthx](https://github.com/fthx) |
-
-All original works are GPL-2.0 or later. WACK Shell is distributed under the same license.
