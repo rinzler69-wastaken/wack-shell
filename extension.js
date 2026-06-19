@@ -942,12 +942,22 @@ export default class WackShellExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
 
-        // Hide native activities button
-        Main.panel.statusArea['activities']?.container.hide();
+        // Hide native activities button and suppress it from showing up
+        const activities = Main.panel.statusArea['activities'];
+        if (activities?.container) {
+            activities.container.hide();
+            this._activitiesShowId = activities.container.connect('show', () => {
+                activities.container.hide();
+            });
+        }
 
         this._logoButton = null;
         this._workspaceButton = null;
         this._appMenuButton = null;
+
+        this._lastHasWindows = Main.sessionMode.hasWindows;
+
+        this._sessionUpdatedId = Main.sessionMode.connect('updated', () => this._syncSessionModeUI());
 
         this._settings.connectObject(
             'changed::show-logo-menu', () => this._syncLogoMenu(),
@@ -963,6 +973,16 @@ export default class WackShellExtension extends Extension {
     }
 
     disable() {
+        if (this._activitiesShowId) {
+            Main.panel.statusArea['activities']?.container.disconnect(this._activitiesShowId);
+            this._activitiesShowId = null;
+        }
+
+        if (this._sessionUpdatedId) {
+            Main.sessionMode.disconnect(this._sessionUpdatedId);
+            this._sessionUpdatedId = null;
+        }
+
         this._destroyProximityTracking();
         this._unloadProximityStylesheet();
         this._clearPanelStyle();
@@ -1009,6 +1029,7 @@ export default class WackShellExtension extends Extension {
                 this._logoButton = null;
             }
         }
+        this._syncSessionModeUI();
     }
 
     _syncWorkspaceWidget() {
@@ -1026,6 +1047,7 @@ export default class WackShellExtension extends Extension {
                 this._workspaceButton = null;
             }
         }
+        this._syncSessionModeUI();
     }
 
     _syncAppMenu() {
@@ -1043,6 +1065,95 @@ export default class WackShellExtension extends Extension {
                 this._appMenuButton = null;
             }
         }
+        this._syncSessionModeUI();
+    }
+
+    _syncSessionModeUI() {
+        const hasWindows = Main.sessionMode.hasWindows;
+        const isLocked = !hasWindows;
+        const opacity = isLocked ? 0 : 255;
+        const reactive = !isLocked;
+
+        if (this._logoButton) {
+            this._logoButton.opacity = opacity;
+            this._logoButton.reactive = reactive;
+            this._logoButton.can_focus = reactive;
+        }
+        if (this._workspaceButton) {
+            this._workspaceButton.opacity = opacity;
+            this._workspaceButton.reactive = reactive;
+            this._workspaceButton.can_focus = reactive;
+        }
+        if (this._appMenuButton) {
+            this._appMenuButton.opacity = opacity;
+            this._appMenuButton.reactive = reactive;
+            this._appMenuButton.can_focus = reactive;
+        }
+
+        // Trigger window entrance animation when transitioning from locked to unlocked
+        if (hasWindows && this._lastHasWindows === false) {
+            this._animateWindowsIn();
+        }
+
+        this._lastHasWindows = hasWindows;
+    }
+
+    _animateWindowsIn() {
+        let windowActors = [];
+        try {
+            const workspace = global.workspace_manager.get_active_workspace();
+            const windows = workspace.list_windows().filter(metaWindow => {
+                return !metaWindow.is_hidden() &&
+                       metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
+                       !metaWindow.is_attached_dialog() &&
+                       !metaWindow.maximized_horizontally &&
+                       !metaWindow.maximized_vertically;
+            });
+            windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
+        } catch (err) {
+            console.error(`[WACK Shell] Failed to find windows for animation: ${err}`);
+            return;
+        }
+
+        windowActors.forEach(actor => {
+            actor.remove_all_transitions();
+
+            const isDialog = actor.meta_window.get_window_type() === Meta.WindowType.DIALOG ||
+                             actor.meta_window.get_window_type() === Meta.WindowType.MODAL_DIALOG;
+
+            if (isDialog) {
+                actor.set_pivot_point(0.5, 0.5);
+                actor.scale_x = 1.0;
+                actor.scale_y = 0.01;
+                actor.opacity = 0;
+
+                actor.ease({
+                    opacity: 255,
+                    scale_y: 1.0,
+                    duration: 150,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                    onComplete: () => {
+                        actor.set_pivot_point(0.0, 0.0);
+                    }
+                });
+            } else {
+                actor.set_pivot_point(0.5, 1.0);
+                actor.scale_x = 0.01;
+                actor.scale_y = 0.05;
+                actor.opacity = 0;
+
+                actor.ease({
+                    opacity: 255,
+                    scale_x: 1.0,
+                    scale_y: 1.0,
+                    duration: 250,
+                    mode: Clutter.AnimationMode.EASE_OUT_EXPO,
+                    onComplete: () => {
+                        actor.set_pivot_point(0.0, 0.0);
+                    }
+                });
+            }
+        });
     }
 
     _initProximity() {
@@ -1216,6 +1327,12 @@ export default class WackShellExtension extends Extension {
 
         // Don't apply custom color when overview is visible
         if (Main.overview.visible) {
+            this._clearPanelStyle();
+            return;
+        }
+
+        // Don't apply custom color when screen is locked
+        if (Main.sessionMode.currentMode === 'unlock-dialog') {
             this._clearPanelStyle();
             return;
         }
