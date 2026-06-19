@@ -21,12 +21,47 @@ import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/
 
 import * as Constants from './constants.js';
 import { SelectionWindow } from './selection.js';
+import * as GradientManager from './gradientManager.js';
 
 const INACTIVE_WORKSPACE_DOT_SCALE = 0.75;
 const BUTTON_DND_ACTIVATION_TIMEOUT = 500;
 
 function clamp(val, min, max) {
     return Math.max(min, Math.min(val, max));
+}
+
+function parseColorStringToRgb(str) {
+    if (!str) return { r: 0, g: 0, b: 0 };
+    const cleanedStr = str.trim();
+    if (cleanedStr.startsWith('#')) {
+        const cleaned = cleanedStr.replace('#', '');
+        if (cleaned.length === 3) {
+            return {
+                r: parseInt(cleaned[0] + cleaned[0], 16),
+                g: parseInt(cleaned[1] + cleaned[1], 16),
+                b: parseInt(cleaned[2] + cleaned[2], 16)
+            };
+        } else if (cleaned.length === 6) {
+            return {
+                r: parseInt(cleaned.substring(0, 2), 16),
+                g: parseInt(cleaned.substring(2, 4), 16),
+                b: parseInt(cleaned.substring(4, 6), 16)
+            };
+        }
+    }
+    const match = cleanedStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        return {
+            r: parseInt(match[1], 10),
+            g: parseInt(match[2], 10),
+            b: parseInt(match[3], 10)
+        };
+    }
+    return { r: 0, g: 0, b: 0 };
+}
+
+function getLuminance(r, g, b) {
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
 }
 
 // Custom MenuItem class registered once at module load
@@ -970,6 +1005,7 @@ export default class WackShellExtension extends Extension {
         this._syncWorkspaceWidget();
         this._syncAppMenu();
         this._initProximity();
+        this._initGradient();
     }
 
     disable() {
@@ -986,10 +1022,23 @@ export default class WackShellExtension extends Extension {
         this._destroyProximityTracking();
         this._unloadProximityStylesheet();
         this._clearPanelStyle();
+
+        // Clear gradient and contrast styling
+        Main.panel.set_style(null);
+        Main.panel.remove_style_class_name('light-contrast');
+
+        if (this._bgSettings) {
+            this._bgSettings.disconnectObject(this);
+            this._bgSettings = null;
+        }
+
         if (this._desktopSettings) {
             this._desktopSettings.disconnectObject(this);
             this._desktopSettings = null;
         }
+
+        GradientManager.clearCache();
+        this._currentColors = null;
 
         this._settings.disconnectObject(this);
         this._settings = null;
@@ -1385,9 +1434,87 @@ export default class WackShellExtension extends Extension {
 
     _applyPanelStyle() {
         Main.panel.add_style_class_name('panel-proximity');
+        Main.panel.set_style(null); // Clear wallpaper gradient style so proximity takes precedence
+        if (this._currentColors) {
+            this._updateContrast(this._currentColors);
+        }
     }
 
     _clearPanelStyle() {
         Main.panel.remove_style_class_name('panel-proximity');
+        this._applyWallpaperGradient(); // Re-apply the wallpaper gradient
+    }
+
+    _initGradient() {
+        this._bgSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
+
+        this._settings.connectObject(
+            'changed::enable-wallpaper-gradient', () => this._syncGradient(),
+            this
+        );
+
+        this._bgSettings.connectObject(
+            'changed::picture-uri', () => this._updateGradient(),
+            'changed::picture-uri-dark', () => this._updateGradient(),
+            'changed::picture-options', () => this._updateGradient(),
+            'changed::primary-color', () => this._updateGradient(),
+            'changed::secondary-color', () => this._updateGradient(),
+            'changed::color-shading-type', () => this._updateGradient(),
+            this
+        );
+
+        if (this._desktopSettings) {
+            this._desktopSettings.connectObject(
+                'changed::color-scheme', () => this._updateGradient(),
+                this
+            );
+        }
+
+        this._syncGradient();
+    }
+
+    _syncGradient() {
+        if (this._settings.get_boolean('enable-wallpaper-gradient')) {
+            this._updateGradient();
+        } else {
+            this._currentColors = null;
+            this._applyWallpaperGradient();
+        }
+    }
+
+    async _updateGradient() {
+        try {
+            const colors = await GradientManager.getPanelGradientColors();
+            // Check if extension was disabled in the meantime
+            if (!this._settings) return;
+            this._currentColors = colors;
+            this._applyWallpaperGradient();
+        } catch (e) {
+            console.error(`[WACK Shell] Failed to update wallpaper gradient: ${e}`);
+        }
+    }
+
+    _applyWallpaperGradient() {
+        if (!this._settings || !this._settings.get_boolean('enable-wallpaper-gradient')) {
+            Main.panel.set_style(null);
+            Main.panel.remove_style_class_name('light-contrast');
+            return;
+        }
+
+        if (this._currentColors) {
+            const isProximityActive = Main.panel.has_style_class_name('panel-proximity');
+            if (!isProximityActive) {
+                const left = this._currentColors.left;
+                const right = this._currentColors.right;
+                const gradientStyle = `background-gradient-direction: horizontal; background-gradient-start: rgb(${left.r}, ${left.g}, ${left.b}); background-gradient-end: rgb(${right.r}, ${right.g}, ${right.b});`;
+                Main.panel.set_style(gradientStyle);
+            }
+            this._updateContrast(this._currentColors);
+        }
+    }
+
+    _updateContrast(colors) {
+        // Stubbed out for now to focus on gradient logic first
+        Main.panel.remove_style_class_name('light-contrast');
     }
 }

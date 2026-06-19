@@ -23,3 +23,19 @@
 .wack-app-menu-button StLabel {
   color: inherit !important;
 }
+
+/* Styling for light backgrounds (dark text/icons) */
+.light-contrast .panel-button,
+.light-contrast .panel-button * {
+  color: rgb(20, 20, 20) !important;
+}
+
+.light-contrast .system-status-icon,
+.light-contrast .app-menu-icon,
+.light-contrast .popup-menu-arrow {
+  color: rgb(20, 20, 20) !important;
+}
+
+.light-contrast .workspace-dot {
+  background-color: rgb(20, 20, 20) !important;
+}

@@ -171,6 +171,12 @@
       <summary>Colored App Menu Icon</summary>
       <description>Show the active application icon in color rather than monochrome.</description>
     </key>
+
+    <key type="b" name="enable-wallpaper-gradient">
+      <default>true</default>
+      <summary>Enable Wallpaper Gradient Background</summary>
+      <description>Smoothly bridge the left and right dominant colors of the wallpaper to color the panel.</description>
+    </key>
     
   </schema>
 </schemalist>

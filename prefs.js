@@ -343,6 +343,22 @@ export default class WackShellPreferences extends ExtensionPreferences {
 
         generalPage.add(actionsGroup);
 
+        // Group 2.2.5: Panel Wallpaper Gradient
+        const gradientGroup = new Adw.PreferencesGroup({
+            title: 'Wallpaper Gradient',
+            description: 'Match the top panel background colors to the desktop wallpaper',
+        });
+
+        gradientGroup.add(this._buildSwitchRow(
+            settings,
+            settingsSignalIds,
+            'enable-wallpaper-gradient',
+            'Enable Wallpaper Gradient Background',
+            'Smoothly bridge the left and right colors of the wallpaper to style the panel'
+        ));
+
+        generalPage.add(gradientGroup);
+
         // Group 2.3: Panel Proximity
         const proximityGroup = new Adw.PreferencesGroup({
             title: 'Panel Proximity',
