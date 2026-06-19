@@ -196,6 +196,8 @@ export async function getPanelGradientColors() {
     let center = { r: 40, g: 40, b: 40 };
     let overallL = 0.5;
     let overallChroma = 0.0;
+    let rawColSamples = null;
+    let dynamicStops = [];
 
     if (isColor) {
         const c1 = parseHexColor(primaryColor);
@@ -214,6 +216,24 @@ export async function getPanelGradientColors() {
                 b: Math.round((c1.b + c2.b) / 2)
             };
         }
+
+        // Generate 5 stops for color mode
+        if (shadingType === 0 || shadingType === 1) {
+            for (let i = 0; i < 5; i++) {
+                dynamicStops.push({ offset: i / 4, color: c1 });
+            }
+        } else {
+            for (let i = 0; i < 5; i++) {
+                const pct = i / 4;
+                const c = {
+                    r: Math.round((1 - pct) * c1.r + pct * c2.r),
+                    g: Math.round((1 - pct) * c1.g + pct * c2.g),
+                    b: Math.round((1 - pct) * c1.b + pct * c2.b)
+                };
+                dynamicStops.push({ offset: pct, color: c });
+            }
+        }
+
         const avgR = (left.r + right.r + center.r) / 3;
         const avgG = (left.g + right.g + center.g) / 3;
         const avgB = (left.b + right.b + center.b) / 3;
@@ -298,6 +318,16 @@ export async function getPanelGradientColors() {
             right = sampleRegion(pixels, channels, rowstride, rightXStart, rightXEnd, yStart, yEnd);
             center = sampleRegion(pixels, channels, rowstride, centerXStart, centerXEnd, yStart, yEnd);
 
+            rawColSamples = [];
+            for (let i = 0; i < 10; i++) {
+                const xPct = i / 9;
+                const xStart = Math.round(visibleX + xPct * (visibleW - 1));
+                const colW = Math.max(1, Math.round(visibleW * 0.05));
+                const sampleXStart = Math.max(visibleX, xStart - colW / 2);
+                const sampleXEnd = Math.min(visibleX + visibleW, xStart + colW / 2);
+                rawColSamples.push(sampleRegion(pixels, channels, rowstride, sampleXStart, sampleXEnd, yStart, yEnd));
+            }
+
             const avgColor = getOverallAverageColor(pixels, channels, rowstride, visibleX, visibleY, visibleW, visibleH);
             overallL = getLuminance(avgColor.r, avgColor.g, avgColor.b);
             const maxVal = Math.max(avgColor.r, avgColor.g, avgColor.b);
@@ -344,13 +374,110 @@ export async function getPanelGradientColors() {
         b: Math.round(baseRight.b * (1 - tintAmount) + tintColor * tintAmount)
     };
 
+    const blendedCenter = {
+        r: Math.round(center.r * (1 - tintAmount) + tintColor * tintAmount),
+        g: Math.round(center.g * (1 - tintAmount) + tintColor * tintAmount),
+        b: Math.round(center.b * (1 - tintAmount) + tintColor * tintAmount)
+    };
+
+    // Process rawColSamples into dynamic stops
+    if (rawColSamples) {
+        const colors = rawColSamples.map(rawColor => ({
+            r: Math.round(rawColor.r * (1 - tintAmount) + tintColor * tintAmount),
+            g: Math.round(rawColor.g * (1 - tintAmount) + tintColor * tintAmount),
+            b: Math.round(rawColor.b * (1 - tintAmount) + tintColor * tintAmount)
+        }));
+
+        const xOffsets = [];
+        for (let i = 0; i < 10; i++) {
+            xOffsets.push(i / 9);
+        }
+
+        // Calculate cumulative distances
+        const cumDist = [0];
+        let totalDist = 0;
+        for (let i = 0; i < 9; i++) {
+            const rDiff = colors[i+1].r - colors[i].r;
+            const gDiff = colors[i+1].g - colors[i].g;
+            const bDiff = colors[i+1].b - colors[i].b;
+            const d = Math.sqrt(rDiff*rDiff + gDiff*gDiff + bDiff*bDiff);
+            totalDist += d;
+            cumDist.push(totalDist);
+        }
+
+        // Stop 0
+        dynamicStops.push({ offset: 0.0, color: colors[0] });
+
+        if (totalDist === 0) {
+            for (let p = 1; p <= 3; p++) {
+                const pct = p / 4;
+                const idx = pct * 9;
+                const idxFloor = Math.floor(idx);
+                const idxCeil = Math.ceil(idx);
+                const t = idx - idxFloor;
+                const c = {
+                    r: Math.round((1 - t) * colors[idxFloor].r + t * colors[idxCeil].r),
+                    g: Math.round((1 - t) * colors[idxFloor].g + t * colors[idxCeil].g),
+                    b: Math.round((1 - t) * colors[idxFloor].b + t * colors[idxCeil].b)
+                };
+                dynamicStops.push({ offset: pct, color: c });
+            }
+        } else {
+            for (let p = 1; p <= 3; p++) {
+                const target = (p / 4) * totalDist;
+                let k = 0;
+                for (let i = 0; i < 9; i++) {
+                    if (cumDist[i] <= target && target <= cumDist[i+1]) {
+                        k = i;
+                        break;
+                    }
+                }
+                const denom = cumDist[k+1] - cumDist[k];
+                const t = denom > 0 ? (target - cumDist[k]) / denom : 0;
+                
+                const offset = xOffsets[k] + t * (xOffsets[k+1] - xOffsets[k]);
+                const color = {
+                    r: Math.round((1 - t) * colors[k].r + t * colors[k+1].r),
+                    g: Math.round((1 - t) * colors[k].g + t * colors[k+1].g),
+                    b: Math.round((1 - t) * colors[k].b + t * colors[k+1].b)
+                };
+                dynamicStops.push({ offset, color });
+            }
+        }
+
+        // Stop 4
+        dynamicStops.push({ offset: 1.0, color: colors[9] });
+    } else if (dynamicStops.length === 0) {
+        // Fallback for image-based backgrounds if rawColSamples wasn't generated
+        dynamicStops.push({ offset: 0.0, color: blendedLeft });
+        dynamicStops.push({
+            offset: 0.25,
+            color: {
+                r: Math.round(blendedLeft.r * 0.5 + blendedCenter.r * 0.5),
+                g: Math.round(blendedLeft.g * 0.5 + blendedCenter.g * 0.5),
+                b: Math.round(blendedLeft.b * 0.5 + blendedCenter.b * 0.5)
+            }
+        });
+        dynamicStops.push({ offset: 0.5, color: blendedCenter });
+        dynamicStops.push({
+            offset: 0.75,
+            color: {
+                r: Math.round(blendedCenter.r * 0.5 + blendedRight.r * 0.5),
+                g: Math.round(blendedCenter.g * 0.5 + blendedRight.g * 0.5),
+                b: Math.round(blendedCenter.b * 0.5 + blendedRight.b * 0.5)
+            }
+        });
+        dynamicStops.push({ offset: 1.0, color: blendedRight });
+    }
+
     const result = {
         left: blendedLeft,
         right: blendedRight,
-        center,
+        center: blendedCenter,
         leftLuminance: getLuminance(blendedLeft.r, blendedLeft.g, blendedLeft.b),
         rightLuminance: getLuminance(blendedRight.r, blendedRight.g, blendedRight.b),
-        centerLuminance: getLuminance(center.r, center.g, center.b)
+        centerLuminance: getLuminance(blendedCenter.r, blendedCenter.g, blendedCenter.b),
+        stops: dynamicStops
     };
 
     _cache.set(cacheKey, result);

@@ -357,6 +357,23 @@ export default class WackShellPreferences extends ExtensionPreferences {
             'Smoothly bridge the left and right colors of the wallpaper to style the panel'
         ));
 
+        const gradientTypeRow = this._buildComboRowInt(
+            settings,
+            settingsSignalIds,
+            'wallpaper-gradient-type',
+            'Gradient Type',
+            'Choose between Linear (2-point) or Lenient (multi-stop translucent) gradient.',
+            ['Linear', 'Lenient']
+        );
+        gradientGroup.add(gradientTypeRow);
+
+        const updateGradientTypeSensitivity = () => {
+            gradientTypeRow.sensitive = settings.get_boolean('enable-wallpaper-gradient');
+        };
+        const enableGradientSig = settings.connect('changed::enable-wallpaper-gradient', updateGradientTypeSensitivity);
+        settingsSignalIds.push(enableGradientSig);
+        updateGradientTypeSensitivity();
+
         generalPage.add(gradientGroup);
 
         // Group 2.3: Panel Proximity

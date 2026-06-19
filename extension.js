@@ -1023,6 +1023,18 @@ export default class WackShellExtension extends Extension {
         this._unloadProximityStylesheet();
         this._clearPanelStyle();
 
+        if (this._queuedUpdateId) {
+            GLib.source_remove(this._queuedUpdateId);
+            this._queuedUpdateId = null;
+        }
+
+        if (this._gradientSignals) {
+            this._gradientSignals.forEach(sig => sig.object.disconnect(sig.id));
+            this._gradientSignals = null;
+        }
+
+        this._destroyLenientOverlay();
+
         // Clear gradient and contrast styling
         Main.panel.set_style(null);
         Main.panel.remove_style_class_name('light-contrast');
@@ -1246,16 +1258,6 @@ export default class WackShellExtension extends Extension {
     }
 
     _connectProximitySignals() {
-        // Connect to overview opening/closing
-        const sigShowing = Main.overview.connect('showing', () => this._updatePanelVisibility());
-        const sigHidden = Main.overview.connect('hidden', () => this._updatePanelVisibility());
-        this._proximitySignals.push({ object: Main.overview, id: sigShowing });
-        this._proximitySignals.push({ object: Main.overview, id: sigHidden });
-
-        // Connect to session mode update
-        const sigSession = Main.sessionMode.connect('updated', () => this._updatePanelVisibility());
-        this._proximitySignals.push({ object: Main.sessionMode, id: sigSession });
-
         // Manage already-existing windows
         for (const meta_window_actor of global.get_window_actors()) {
             this._onProximityWindowActorAdded(meta_window_actor.get_parent(), meta_window_actor);
@@ -1268,34 +1270,40 @@ export default class WackShellExtension extends Extension {
         this._proximitySignals.push({ object: global.window_group, id: sigChildRemoved });
 
         // Connect to workspace change
-        const sigSwitchWS = global.window_manager.connect('switch-workspace', () => this._updatePanelVisibility());
+        const sigSwitchWS = global.window_manager.connect('switch-workspace', () => this._queueUpdatePanelVisibility());
         this._proximitySignals.push({ object: global.window_manager, id: sigSwitchWS });
 
         // Perform initial update
-        this._updatePanelVisibility();
+        this._queueUpdatePanelVisibility();
     }
 
     _onProximityWindowActorAdded(container, meta_window_actor) {
         const signals = [
-            { object: meta_window_actor, id: meta_window_actor.connect('notify::allocation', () => this._updatePanelVisibility()) },
-            { object: meta_window_actor, id: meta_window_actor.connect('notify::visible', () => this._updatePanelVisibility()) }
+            { object: meta_window_actor, id: meta_window_actor.connect('notify::allocation', () => this._queueUpdatePanelVisibility()) },
+            { object: meta_window_actor, id: meta_window_actor.connect('notify::visible', () => this._queueUpdatePanelVisibility()) }
         ];
 
-        if (meta_window_actor.meta_window) {
-            signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._updatePanelVisibility()) });
+        if (!meta_window_actor.meta_window) {
+            signals.push({ object: meta_window_actor, id: meta_window_actor.connect('notify::meta-window', () => {
+                if (meta_window_actor.meta_window) {
+                    signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._queueUpdatePanelVisibility()) });
+                }
+            }) });
+        } else {
+            signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._queueUpdatePanelVisibility()) });
         }
 
         this._proximityWindowSignals.set(meta_window_actor, signals);
-        this._updatePanelVisibility();
+        this._queueUpdatePanelVisibility();
     }
 
     _onProximityWindowActorRemoved(container, meta_window_actor) {
         const signals = this._proximityWindowSignals.get(meta_window_actor);
         if (signals) {
-            signals.forEach(({ object, id }) => object.disconnect(id));
+            signals.forEach(sig => sig.object.disconnect(sig.id));
             this._proximityWindowSignals.delete(meta_window_actor);
         }
-        this._updatePanelVisibility();
+        this._queueUpdatePanelVisibility();
     }
 
     _destroyProximityTracking() {
@@ -1306,7 +1314,7 @@ export default class WackShellExtension extends Extension {
 
         if (this._proximityWindowSignals) {
             for (const [win, signals] of this._proximityWindowSignals) {
-                signals.forEach(({ object, id }) => object.disconnect(id));
+                signals.forEach(sig => sig.object.disconnect(sig.id));
             }
             this._proximityWindowSignals.clear();
         }
@@ -1365,23 +1373,36 @@ export default class WackShellExtension extends Extension {
             console.error(`[wack-shell-proximity] Error writing custom stylesheet: ${e}`);
         }
 
-        this._updatePanelVisibility();
+        this._queueUpdatePanelVisibility();
+    }
+
+    _queueUpdatePanelVisibility() {
+        if (this._queuedUpdateId) {
+            GLib.source_remove(this._queuedUpdateId);
+            this._queuedUpdateId = null;
+        }
+        this._queuedUpdateId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._queuedUpdateId = null;
+            this._updatePanelVisibility();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _updatePanelVisibility() {
-        if (!this._settings.get_boolean('enable-panel-proximity')) {
-            this._clearPanelStyle();
-            return;
-        }
-
         // Don't apply custom color when overview is visible
-        if (Main.overview.visible) {
+        if (Main.overview.visibleTarget) {
             this._clearPanelStyle();
             return;
         }
 
-        // Don't apply custom color when screen is locked
-        if (Main.sessionMode.currentMode === 'unlock-dialog') {
+        // Don't apply custom color when screen is locked (and not in Cupertino unlock transition)
+        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows;
+        if (isLockscreen) {
+            this._clearPanelStyle();
+            return;
+        }
+
+        if (!this._settings.get_boolean('enable-panel-proximity')) {
             this._clearPanelStyle();
             return;
         }
@@ -1447,9 +1468,12 @@ export default class WackShellExtension extends Extension {
 
     _initGradient() {
         this._bgSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
+        this._gradientSignals = [];
+        this._settingStyle = false;
 
         this._settings.connectObject(
             'changed::enable-wallpaper-gradient', () => this._syncGradient(),
+            'changed::wallpaper-gradient-type', () => this._syncGradient(),
             this
         );
 
@@ -1469,6 +1493,19 @@ export default class WackShellExtension extends Extension {
                 this
             );
         }
+
+        // Track overview and session mode changes for gradient/transparency updates
+        const sigShowing = Main.overview.connect('showing', () => this._queueUpdatePanelVisibility());
+        const sigHiding = Main.overview.connect('hiding', () => this._queueUpdatePanelVisibility());
+        const sigHidden = Main.overview.connect('hidden', () => this._queueUpdatePanelVisibility());
+        const sigSession = Main.sessionMode.connect('updated', () => this._queueUpdatePanelVisibility());
+        const sigStyle = Main.panel.connect('notify::style', () => this._applyWallpaperGradient());
+        
+        this._gradientSignals.push({ object: Main.overview, id: sigShowing });
+        this._gradientSignals.push({ object: Main.overview, id: sigHiding });
+        this._gradientSignals.push({ object: Main.overview, id: sigHidden });
+        this._gradientSignals.push({ object: Main.sessionMode, id: sigSession });
+        this._gradientSignals.push({ object: Main.panel, id: sigStyle });
 
         this._syncGradient();
     }
@@ -1494,10 +1531,44 @@ export default class WackShellExtension extends Extension {
         }
     }
 
+    _destroyLenientOverlay() {
+        if (this._lenientOverlay) {
+            this._lenientOverlay.destroy();
+            this._lenientOverlay = null;
+        }
+    }
+
     _applyWallpaperGradient() {
-        if (!this._settings || !this._settings.get_boolean('enable-wallpaper-gradient')) {
-            Main.panel.set_style(null);
-            Main.panel.remove_style_class_name('light-contrast');
+        if (this._settingStyle) return;
+
+        const enabled = this._settings && this._settings.get_boolean('enable-wallpaper-gradient');
+        if (!enabled) {
+            this._destroyLenientOverlay();
+            if (Main.panel.style !== null && Main.panel.style !== '') {
+                this._settingStyle = true;
+                try {
+                    Main.panel.set_style(null);
+                    Main.panel.remove_style_class_name('light-contrast');
+                } finally {
+                    this._settingStyle = false;
+                }
+            }
+            return;
+        }
+
+        // Transparent panel in overview mode or during lock screen / unlock dialog (and not in Cupertino unlock transition)
+        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows;
+        if (Main.overview.visibleTarget || isLockscreen) {
+            this._destroyLenientOverlay();
+            if (Main.panel.style !== null && Main.panel.style !== '') {
+                this._settingStyle = true;
+                try {
+                    Main.panel.set_style(null);
+                    Main.panel.remove_style_class_name('light-contrast');
+                } finally {
+                    this._settingStyle = false;
+                }
+            }
             return;
         }
 
@@ -1506,8 +1577,91 @@ export default class WackShellExtension extends Extension {
             if (!isProximityActive) {
                 const left = this._currentColors.left;
                 const right = this._currentColors.right;
-                const gradientStyle = `background-gradient-direction: horizontal; background-gradient-start: rgb(${left.r}, ${left.g}, ${left.b}); background-gradient-end: rgb(${right.r}, ${right.g}, ${right.b});`;
-                Main.panel.set_style(gradientStyle);
+                const gradientType = this._settings.get_int('wallpaper-gradient-type');
+
+                if (gradientType === 1) { // Lenient: multi-stop via stacked St.Widget segments
+                    const stops = (this._currentColors.stops && this._currentColors.stops.length >= 2)
+                        ? this._currentColors.stops
+                        : [{ offset: 0, color: left }, { offset: 1, color: right }];
+
+                    // Rebuild overlay only when stops actually changed
+                    const stopsKey = stops.map(s =>
+                        `${s.offset}:${s.color.r},${s.color.g},${s.color.b}`).join('|');
+
+                    if (this._lenientStopsKey !== stopsKey) {
+                        this._lenientStopsKey = stopsKey;
+                        this._destroyLenientOverlay();
+
+                        // Use a plain Clutter.Actor so we can drive child positions
+                        // ourselves via notify::allocation — St CSS layout/positioning
+                        // properties like position/left/width% are not supported in St.
+                        const overlay = new Clutter.Actor({ reactive: false });
+
+                        const segDefs = [];
+                        for (let i = 0; i < stops.length - 1; i++) {
+                            const a = stops[i];
+                            const b = stops[i + 1];
+                            const seg = new St.Widget({
+                                style: [
+                                    `background-gradient-direction: horizontal`,
+                                    `background-gradient-start: rgb(${a.color.r},${a.color.g},${a.color.b})`,
+                                    `background-gradient-end: rgb(${b.color.r},${b.color.g},${b.color.b})`,
+                                ].join('; '),
+                                reactive: false,
+                            });
+                            overlay.add_child(seg);
+                            segDefs.push({ seg, startOffset: a.offset, endOffset: b.offset });
+                        }
+
+                        // Re-measure and reposition segments whenever the overlay is sized
+                        overlay.connect('notify::allocation', () => {
+                            const totalW = overlay.width;
+                            const totalH = overlay.height;
+                            if (totalW <= 0 || totalH <= 0) return;
+                            for (const { seg, startOffset, endOffset } of segDefs) {
+                                seg.set_position(Math.round(startOffset * totalW), 0);
+                                seg.set_size(
+                                    Math.round((endOffset - startOffset) * totalW),
+                                    totalH
+                                );
+                            }
+                        });
+
+                        // Pin the overlay to fill the panel exactly
+                        overlay.add_constraint(new Clutter.BindConstraint({
+                            source: Main.panel,
+                            coordinate: Clutter.BindCoordinate.SIZE,
+                        }));
+                        overlay.set_position(0, 0);
+
+                        Main.panel.insert_child_at_index(overlay, 0);
+                        this._lenientOverlay = overlay;
+                    }
+
+                    // Clear any direct panel style so we don't double-render
+                    if (Main.panel.style !== null && Main.panel.style !== '') {
+                        this._settingStyle = true;
+                        try {
+                            Main.panel.set_style(null);
+                        } finally {
+                            this._settingStyle = false;
+                        }
+                    }
+
+                } else { // Linear (2-point) — destroy overlay if switching modes
+                    this._destroyLenientOverlay();
+                    this._lenientStopsKey = null;
+
+                    const gradientStyle = `background-gradient-direction: horizontal; background-gradient-start: rgb(${left.r}, ${left.g}, ${left.b}); background-gradient-end: rgb(${right.r}, ${right.g}, ${right.b});`;
+                    if (Main.panel.style !== gradientStyle) {
+                        this._settingStyle = true;
+                        try {
+                            Main.panel.set_style(gradientStyle);
+                        } finally {
+                            this._settingStyle = false;
+                        }
+                    }
+                }
             }
             this._updateContrast(this._currentColors);
         }
