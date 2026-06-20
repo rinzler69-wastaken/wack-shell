@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gdk from 'gi://Gdk';
@@ -49,6 +50,10 @@ export default class WackShellPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
         const settingsSignalIds = [];
+
+        const shellSettings = new Gio.Settings({ schema: 'org.gnome.shell' });
+        let bmsSettings = null;
+        let bmsBlurSig = 0;
 
         window.set_default_size(700, 800);
 
@@ -556,16 +561,83 @@ export default class WackShellPreferences extends ExtensionPreferences {
         const styleSig = settings.connect('changed::vibrancy-style', syncStyleRows);
         settingsSignalIds.push(styleSig);
 
+        const initBmsSettings = () => {
+            if (bmsSettings) return;
+            try {
+                bmsSettings = new Gio.Settings({
+                    schema: 'org.gnome.shell.extensions.blur-my-shell.panel',
+                });
+            } catch (e) {
+                try {
+                    const paths = [
+                        GLib.get_home_dir() + '/.local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas',
+                        '/usr/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas',
+                        '/usr/local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas'
+                    ];
+                    for (const path of paths) {
+                        const file = Gio.File.new_for_path(path);
+                        if (file.query_exists(null)) {
+                            const source = Gio.SettingsSchemaSource.new_from_directory(
+                                path,
+                                Gio.SettingsSchemaSource.get_default(),
+                                false
+                            );
+                            const schema = source.lookup('org.gnome.shell.extensions.blur-my-shell.panel', true);
+                            if (schema) {
+                                bmsSettings = new Gio.Settings({ settings_schema: schema });
+                                break;
+                            }
+                        }
+                    }
+                } catch (err) {
+                    bmsSettings = null;
+                }
+            }
+
+            if (bmsSettings && !bmsBlurSig) {
+                bmsBlurSig = bmsSettings.connect('changed::blur', updateVibrancySensitivity);
+            }
+        };
+
+        const bmsHasPanelBlur = () => {
+            try {
+                const enabledExts = shellSettings.get_strv('enabled-extensions');
+                if (!enabledExts.includes('blur-my-shell@aunetx'))
+                    return false;
+                initBmsSettings();
+                return bmsSettings ? bmsSettings.get_boolean('blur') : false;
+            } catch {
+                return false;
+            }
+        };
+
         const updateVibrancySensitivity = () => {
-            const active = settings.get_boolean('enable-vibrancy');
-            blurModeRow.sensitive = active;
-            alwaysLightRow.sensitive = active;
+            const bmsConflict = bmsHasPanelBlur();
+            if (bmsConflict) {
+                vibrancyGroup.sensitive = false;
+                vibrancyGroup.title = 'Vibrancy - BMS Panel Blur is enabled, disable it to use Vibrancy.';
+                vibrancyRow.subtitle = 'Disabled because Blur My Shell\'s panel blur is active';
+            } else {
+                vibrancyGroup.sensitive = true;
+                vibrancyGroup.title = 'Vibrancy';
+                vibrancyRow.subtitle = 'Apply a dynamic, wallpaper-aware frosted glass effect to the panel';
+                const active = settings.get_boolean('enable-vibrancy');
+                blurModeRow.sensitive = active;
+                alwaysLightRow.sensitive = active;
+            }
         };
 
         vibrancyRow.connect('notify::active', updateVibrancySensitivity);
 
         const updateSensSig = settings.connect('changed::enable-vibrancy', updateVibrancySensitivity);
         settingsSignalIds.push(updateSensSig);
+
+        const shellExtSig = shellSettings.connect('changed::enabled-extensions', () => {
+            updateVibrancySensitivity();
+        });
+
+        // Initialize bms settings if BMS is active
+        initBmsSettings();
 
         syncStyleRows();
         updateVibrancySensitivity();
@@ -859,6 +931,10 @@ export default class WackShellPreferences extends ExtensionPreferences {
                 settings.disconnect(id);
             }
             settingsSignalIds.length = 0;
+            shellSettings.disconnect(shellExtSig);
+            if (bmsSettings && bmsBlurSig) {
+                bmsSettings.disconnect(bmsBlurSig);
+            }
         });
     }
 

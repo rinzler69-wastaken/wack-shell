@@ -1581,6 +1581,7 @@ export default class WackShellExtension extends Extension {
     _initVibrancy() {
         this._panelBlur = new PanelBlur();
         this._vibrancyBmsSig = null;
+        this._extStateChangedId = 0;
 
         // React to our own settings changes
         this._settings.connectObject(
@@ -1597,25 +1598,68 @@ export default class WackShellExtension extends Extension {
             );
         }
 
-        // Watch BMS panel-blur key if BMS is installed
+        // Initialize BMS GSettings
+        this._initBmsSettings();
+
         try {
-            this._bmsSettings = new Gio.Settings({
-                schema: 'org.gnome.shell.extensions.blur-my-shell.panel',
+            this._extStateChangedId = Main.extensionManager.connect('extension-state-changed', (_obj, ext) => {
+                if (ext.uuid === 'blur-my-shell@aunetx') {
+                    this._initBmsSettings();
+                    this._syncVibrancy();
+                }
             });
-            this._vibrancyBmsSig = this._bmsSettings.connect(
-                'changed::blur', () => this._syncVibrancy()
-            );
-        } catch {
-            // BMS not installed — no conflict possible
-            this._bmsSettings = null;
+        } catch (e) {
+            this._extStateChangedId = 0;
         }
 
         this._syncVibrancy();
     }
 
+    _initBmsSettings() {
+        if (this._vibrancyBmsSig && this._bmsSettings) {
+            try { this._bmsSettings.disconnect(this._vibrancyBmsSig); } catch {}
+            this._vibrancyBmsSig = null;
+            this._bmsSettings = null;
+        }
+
+        try {
+            this._bmsSettings = new Gio.Settings({ schema: 'org.gnome.shell.extensions.blur-my-shell.panel' });
+        } catch (e) {
+            try {
+                const ext = Main.extensionManager.lookup('blur-my-shell@aunetx');
+                if (ext) {
+                    const schemaDir = ext.dir.get_child('schemas');
+                    if (schemaDir.query_exists(null)) {
+                        const source = Gio.SettingsSchemaSource.new_from_directory(
+                            schemaDir.get_path(),
+                            Gio.SettingsSchemaSource.get_default(),
+                            false
+                        );
+                        const schema = source.lookup('org.gnome.shell.extensions.blur-my-shell.panel', true);
+                        if (schema) {
+                            this._bmsSettings = new Gio.Settings({ settings_schema: schema });
+                        }
+                    }
+                }
+            } catch (err) {
+                this._bmsSettings = null;
+            }
+        }
+
+        if (this._bmsSettings) {
+            this._vibrancyBmsSig = this._bmsSettings.connect(
+                'changed::blur', () => this._syncVibrancy()
+            );
+        }
+    }
+
     /** Returns true if BMS currently has panel blur enabled (conflict). */
     _bmsHasPanelBlur() {
         try {
+            const bmsExt = Main.extensionManager.lookup('blur-my-shell@aunetx');
+            const bmsEnabled = bmsExt && bmsExt.state === 1; // 1 = ExtensionState.ENABLED
+            if (!bmsEnabled)
+                return false;
             return this._bmsSettings?.get_boolean('blur') ?? false;
         } catch {
             return false;
@@ -1755,10 +1799,10 @@ export default class WackShellExtension extends Extension {
         const blurMode = this._settings.get_int('vibrancy-blur-mode');
         const bmsConflict = this._bmsHasPanelBlur();
 
-        if (!enabled || bmsConflict) {
-            // Blur off or BMS is managing it — disable ours
+        if (!enabled) {
+            // Blur off — disable ours
             this._panelBlur.disable();
-            this._applyVibrancyStyle(); // will clear CSS if needed
+            this._applyVibrancyStyle();
             return;
         }
 
@@ -1774,8 +1818,14 @@ export default class WackShellExtension extends Extension {
             resolvedBlurMode = this._isWallpaperLenient() ? 2 : 1;
         }
 
-        const radius = resolvedBlurMode === 1 ? RADIUS_LINEAR : RADIUS_LENIENT;
-        const brightness = (effectiveStyle === 2) ? 0.80 : (isDark ? 0.90 : 0.95);
+        let radius, brightness;
+        if (bmsConflict) {
+            radius = 0;
+            brightness = 1.0;
+        } else {
+            radius = resolvedBlurMode === 1 ? RADIUS_LINEAR : RADIUS_LENIENT;
+            brightness = (effectiveStyle === 2) ? 0.80 : (isDark ? 0.90 : 0.95);
+        }
 
         if (this._panelBlur.enabled) {
             this._panelBlur.updateParams(radius, brightness);
@@ -1801,7 +1851,7 @@ export default class WackShellExtension extends Extension {
         };
 
         // Vibrancy is inactive — leave panel style alone
-        if (!enabled || bmsConflict) {
+        if (!enabled) {
             // Only clear if we previously set a vibrancy style
             if (this._vibrancyStyleActive) {
                 this._settingStyle = true;
@@ -1829,7 +1879,7 @@ export default class WackShellExtension extends Extension {
         const useVenturaLight = (style === 2 || borrowVenturaLight) && !isDark;
 
         // Apply text/icon contrast style: dark text/icons only in Ventura light mode when not in overview or lockscreen
-        if (useVenturaLight && !isOverview && !isLockscreen) {
+        if (useVenturaLight && !isOverview && !isLockscreen && !bmsConflict) {
             Main.panel.add_style_class_name('light-contrast');
         } else {
             Main.panel.remove_style_class_name('light-contrast');
@@ -1839,7 +1889,9 @@ export default class WackShellExtension extends Extension {
         let targetClass = '';
         let panelCSS = '';
 
-        if (isOverview || isLockscreen) {
+        if (bmsConflict) {
+            targetClass = 'panel-bigsur'; // Transparent panel so BMS shows through
+        } else if (isOverview || isLockscreen) {
             targetClass = 'panel-bigsur'; // Transparent background
         } else if (useVenturaLight) {
             targetClass = 'panel-ventura-light';
@@ -1898,8 +1950,14 @@ export default class WackShellExtension extends Extension {
         if (blurMode === 3) {
             resolvedBlurMode = this._isWallpaperLenient() ? 2 : 1;
         }
-        const brightness = (effectiveStyle === 2) ? 0.80 : (isDark ? 0.90 : 0.95);
-        const radius = resolvedBlurMode === 1 ? RADIUS_LINEAR : RADIUS_LENIENT;
+        let brightness, radius;
+        if (bmsConflict) {
+            radius = 0;
+            brightness = 1.0;
+        } else {
+            radius = resolvedBlurMode === 1 ? RADIUS_LINEAR : RADIUS_LENIENT;
+            brightness = (effectiveStyle === 2) ? 0.80 : (isDark ? 0.90 : 0.95);
+        }
         if (this._panelBlur && this._panelBlur.enabled) {
             this._panelBlur.updateParams(radius, brightness);
         }
@@ -1927,6 +1985,13 @@ export default class WackShellExtension extends Extension {
                 this._bmsSettings.disconnect(this._vibrancyBmsSig);
             this._bmsSettings = null;
             this._vibrancyBmsSig = null;
+        }
+
+        if (this._extStateChangedId) {
+            try {
+                Main.extensionManager.disconnect(this._extStateChangedId);
+            } catch {}
+            this._extStateChangedId = 0;
         }
 
         if (this._vibrancyStyleActive) {
