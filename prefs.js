@@ -283,16 +283,81 @@ export default class WackShellPreferences extends ExtensionPreferences {
             'Display separate workspace indicators / Activities label widget next to the logo'
         ));
 
-        const widgetTypeRow = this._buildComboRowInt(
-            settings,
-            settingsSignalIds,
-            'workspace-widget-type',
-            'Workspace Widget Type',
-            'Choose between workspace indicators (dots) or a classic Activities label.',
-            ['Workspace Dots', 'Activities Label']
-        );
+        // 2. Workspace Widget Type Row
+        const widgetTypeRow = new Adw.ActionRow({
+            title: 'Workspace Widget Type',
+        });
         visibilityGroup.add(widgetTypeRow);
 
+        const widgetTypeBox = new Gtk.Box({
+            valign: Gtk.Align.CENTER,
+        });
+
+        const widgetLinkedBox = new Gtk.Box({ css_classes: ['linked'] });
+        const btnDots = new Gtk.ToggleButton({ label: 'Dots' });
+        const btnLabel = new Gtk.ToggleButton({ label: 'Label', group: btnDots });
+        widgetLinkedBox.append(btnDots);
+        widgetLinkedBox.append(btnLabel);
+
+        const widgetDropdown = new Gtk.DropDown({
+            valign: Gtk.Align.CENTER,
+            model: Gtk.StringList.new(['Dots', 'Label'])
+        });
+
+        widgetTypeBox.append(widgetLinkedBox);
+        widgetTypeBox.append(widgetDropdown);
+        widgetTypeRow.add_suffix(widgetTypeBox);
+
+        const WIDGET_DESCRIPTIONS = [
+            'Show vanilla GNOME dots for workspaces',
+            'Show the legacy "Activities" label'
+        ];
+
+        let selfChangeWidgetType = false;
+        const syncWidgetTypeFromSettings = () => {
+            if (selfChangeWidgetType) return;
+            const val = settings.get_int('workspace-widget-type');
+            const index = clamp(val, 0, 1);
+
+            if (index === 0) btnDots.active = true;
+            else btnLabel.active = true;
+
+            widgetDropdown.selected = index;
+            widgetTypeRow.subtitle = WIDGET_DESCRIPTIONS[index];
+            updateWorkspaceWidgetSensitivity();
+        };
+
+        const updateWidgetTypeSetting = (index) => {
+            const val = index;
+            if (settings.get_int('workspace-widget-type') !== val) {
+                selfChangeWidgetType = true;
+                settings.set_int('workspace-widget-type', val);
+                selfChangeWidgetType = false;
+            }
+            widgetTypeRow.subtitle = WIDGET_DESCRIPTIONS[index];
+            updateWorkspaceWidgetSensitivity();
+        };
+
+        btnDots.connect('toggled', () => { if (btnDots.active) updateWidgetTypeSetting(0); });
+        btnLabel.connect('toggled', () => { if (btnLabel.active) updateWidgetTypeSetting(1); });
+
+        widgetDropdown.connect('notify::selected', () => {
+            updateWidgetTypeSetting(widgetDropdown.selected);
+        });
+
+        widgetDropdown.visible = false;
+        widgetLinkedBox.visible = true;
+
+        const widgetCond = Adw.BreakpointCondition.parse('max-width: 450px');
+        const widgetBreakpoint = new Adw.Breakpoint({ condition: widgetCond });
+        widgetBreakpoint.add_setter(widgetLinkedBox, 'visible', false);
+        widgetBreakpoint.add_setter(widgetDropdown, 'visible', true);
+        window.add_breakpoint(widgetBreakpoint);
+
+        const widgetTypeSig = settings.connect('changed::workspace-widget-type', syncWidgetTypeFromSettings);
+        settingsSignalIds.push(widgetTypeSig);
+
+        // 3. Show Workspace Number Row
         const showWorkspaceNumberRow = this._buildSwitchRow(
             settings,
             settingsSignalIds,
@@ -302,11 +367,17 @@ export default class WackShellPreferences extends ExtensionPreferences {
         );
         visibilityGroup.add(showWorkspaceNumberRow);
 
-        const updateWorkspaceNumberRowSensitivity = () => {
-            showWorkspaceNumberRow.sensitive = (widgetTypeRow.selected === 1);
+        const updateWorkspaceWidgetSensitivity = () => {
+            const active = settings.get_boolean('show-workspace-widget');
+            widgetTypeRow.sensitive = active;
+            showWorkspaceNumberRow.sensitive = active && (settings.get_int('workspace-widget-type') === 1);
         };
-        widgetTypeRow.connect('notify::selected', updateWorkspaceNumberRowSensitivity);
-        updateWorkspaceNumberRowSensitivity();
+
+        const workspaceWidgetSig = settings.connect('changed::show-workspace-widget', updateWorkspaceWidgetSensitivity);
+        settingsSignalIds.push(workspaceWidgetSig);
+
+        syncWidgetTypeFromSettings();
+        updateWorkspaceWidgetSensitivity();
 
         generalPage.add(visibilityGroup);
 
@@ -343,43 +414,167 @@ export default class WackShellPreferences extends ExtensionPreferences {
 
         generalPage.add(actionsGroup);
 
-        // Group 2.2.5: Panel Wallpaper Gradient
-        const gradientGroup = new Adw.PreferencesGroup({
-            title: 'Wallpaper Gradient',
-            description: 'Match the top panel background colors to the desktop wallpaper',
+
+
+        // Group 2.2.6: Vibrancy (panel blur + macOS-style transparency)
+        const vibrancyGroup = new Adw.PreferencesGroup({
+            title: 'Vibrancy',
         });
 
-        gradientGroup.add(this._buildSwitchRow(
-            settings,
-            settingsSignalIds,
-            'enable-wallpaper-gradient',
-            'Enable Wallpaper Gradient Background',
-            'Smoothly bridge the left and right colors of the wallpaper to style the panel'
-        ));
+        const vibrancyRow = new Adw.SwitchRow({
+            title: 'Enable/Disable Vibrancy',
+            subtitle: 'Apply a dynamic, wallpaper-aware frosted glass effect to the panel'
+        });
+        vibrancyGroup.add(vibrancyRow);
 
-        const gradientTypeRow = this._buildComboRowInt(
-            settings,
-            settingsSignalIds,
-            'wallpaper-gradient-type',
-            'Gradient Type',
-            'Choose between Linear (2-point) or Lenient (multi-stop translucent) gradient.',
-            ['Linear', 'Lenient']
-        );
-        gradientGroup.add(gradientTypeRow);
-
-        const updateGradientTypeSensitivity = () => {
-            gradientTypeRow.sensitive = settings.get_boolean('enable-wallpaper-gradient');
+        let selfChangeVibrancy = false;
+        const syncVibrancyRow = () => {
+            if (selfChangeVibrancy) return;
+            vibrancyRow.active = settings.get_boolean('enable-vibrancy');
         };
-        const enableGradientSig = settings.connect('changed::enable-wallpaper-gradient', updateGradientTypeSensitivity);
-        settingsSignalIds.push(enableGradientSig);
-        updateGradientTypeSensitivity();
 
-        generalPage.add(gradientGroup);
+        vibrancyRow.connect('notify::active', () => {
+            if (settings.get_boolean('enable-vibrancy') !== vibrancyRow.active) {
+                selfChangeVibrancy = true;
+                settings.set_boolean('enable-vibrancy', vibrancyRow.active);
+                selfChangeVibrancy = false;
+            }
+        });
+
+        const enableSig = settings.connect('changed::enable-vibrancy', syncVibrancyRow);
+        settingsSignalIds.push(enableSig);
+        syncVibrancyRow();
+
+        // 2. Blur Mode Row
+        const blurModeRow = new Adw.ActionRow({
+            title: 'Blur Mode',
+        });
+        vibrancyGroup.add(blurModeRow);
+
+        const blurModeBox = new Gtk.Box({
+            valign: Gtk.Align.CENTER,
+        });
+
+        const linkedBox = new Gtk.Box({ css_classes: ['linked'] });
+        const btnAuto = new Gtk.ToggleButton({ label: 'Auto' });
+        const btnLinear = new Gtk.ToggleButton({ label: 'Linear', group: btnAuto });
+        const btnLenient = new Gtk.ToggleButton({ label: 'Lenient', group: btnAuto });
+        linkedBox.append(btnAuto);
+        linkedBox.append(btnLinear);
+        linkedBox.append(btnLenient);
+
+        const dropdown = new Gtk.DropDown({
+            valign: Gtk.Align.CENTER,
+            model: Gtk.StringList.new(['Auto', 'Linear', 'Lenient'])
+        });
+
+        blurModeBox.append(linkedBox);
+        blurModeBox.append(dropdown);
+        blurModeRow.add_suffix(blurModeBox);
+
+        const BLUR_DESCRIPTIONS = [
+            'Dynamically determines the optimal blur mode based on the active wallpaper',
+            'Tighter blur radius, best for wallpapers with simpler gradients',
+            'Looser blur radius, optimised for wallpapers with multi-stop gradients'
+        ];
+
+        let selfChangeBlur = false;
+        const syncBlurFromSettings = () => {
+            if (selfChangeBlur) return;
+            const val = settings.get_int('vibrancy-blur-mode');
+            let index = 0; // default to Auto
+            if (val === 1) index = 1;
+            else if (val === 2) index = 2;
+
+            if (index === 0) btnAuto.active = true;
+            else if (index === 1) btnLinear.active = true;
+            else btnLenient.active = true;
+
+            dropdown.selected = index;
+            blurModeRow.subtitle = BLUR_DESCRIPTIONS[index];
+        };
+
+        const updateBlurSetting = (index) => {
+            let val = 3; // default to Auto
+            if (index === 1) val = 1;
+            else if (index === 2) val = 2;
+
+            if (settings.get_int('vibrancy-blur-mode') !== val) {
+                selfChangeBlur = true;
+                settings.set_int('vibrancy-blur-mode', val);
+                selfChangeBlur = false;
+            }
+            blurModeRow.subtitle = BLUR_DESCRIPTIONS[index];
+        };
+
+        btnAuto.connect('toggled', () => { if (btnAuto.active) updateBlurSetting(0); });
+        btnLinear.connect('toggled', () => { if (btnLinear.active) updateBlurSetting(1); });
+        btnLenient.connect('toggled', () => { if (btnLenient.active) updateBlurSetting(2); });
+
+        dropdown.connect('notify::selected', () => {
+            updateBlurSetting(dropdown.selected);
+        });
+
+        dropdown.visible = false;
+        linkedBox.visible = true;
+
+        const cond = Adw.BreakpointCondition.parse('max-width: 450px');
+        const breakpoint = new Adw.Breakpoint({ condition: cond });
+        breakpoint.add_setter(linkedBox, 'visible', false);
+        breakpoint.add_setter(dropdown, 'visible', true);
+        window.add_breakpoint(breakpoint);
+
+        const blurSig = settings.connect('changed::vibrancy-blur-mode', syncBlurFromSettings);
+        settingsSignalIds.push(blurSig);
+        syncBlurFromSettings();
+
+        // 3. Always Light Panel Row
+        const alwaysLightRow = new Adw.SwitchRow({
+            title: 'Always Light Panel',
+            subtitle: 'Forces light panel style in light mode',
+        });
+        vibrancyGroup.add(alwaysLightRow);
+
+        let selfChangeStyle = false;
+        const syncStyleRows = () => {
+            if (selfChangeStyle) return;
+            let val = settings.get_int('vibrancy-style');
+            if (val === 0) {
+                settings.set_int('vibrancy-style', 1);
+                val = 1;
+            }
+            alwaysLightRow.active = (val === 2);
+        };
+
+        alwaysLightRow.connect('notify::active', () => {
+            if (selfChangeStyle) return;
+            selfChangeStyle = true;
+            settings.set_int('vibrancy-style', alwaysLightRow.active ? 2 : 1);
+            selfChangeStyle = false;
+        });
+
+        const styleSig = settings.connect('changed::vibrancy-style', syncStyleRows);
+        settingsSignalIds.push(styleSig);
+
+        const updateVibrancySensitivity = () => {
+            const active = settings.get_boolean('enable-vibrancy');
+            blurModeRow.sensitive = active;
+            alwaysLightRow.sensitive = active;
+        };
+
+        vibrancyRow.connect('notify::active', updateVibrancySensitivity);
+
+        const updateSensSig = settings.connect('changed::enable-vibrancy', updateVibrancySensitivity);
+        settingsSignalIds.push(updateSensSig);
+
+        syncStyleRows();
+        updateVibrancySensitivity();
+
+        generalPage.add(vibrancyGroup);
 
         // Group 2.3: Panel Proximity
         const proximityGroup = new Adw.PreferencesGroup({
-            title: 'Panel Proximity',
-            description: 'Dynamically color the panel when an app window is near it',
+            title: 'Proximity',
         });
 
         const buildColorRow = (key, title) => {
@@ -412,8 +607,8 @@ export default class WackShellPreferences extends ExtensionPreferences {
             settings,
             settingsSignalIds,
             'enable-panel-proximity',
-            'Enable Proximity Coloring',
-            'Automatically switch panel opacity/color when windows approach it'
+            'Enable/Disable Proximity',
+            'Automatically switch panel opacity/color when windows are maximised or close to the panel.'
         ));
 
         // Dark Mode Colors Expander

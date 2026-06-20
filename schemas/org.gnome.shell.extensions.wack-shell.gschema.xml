@@ -172,16 +172,25 @@
       <description>Show the active application icon in color rather than monochrome.</description>
     </key>
 
-    <key type="b" name="enable-wallpaper-gradient">
+
+
+    <!-- Vibrancy — panel blur + style (macOS-style vibrancy effect) -->
+    <key type="b" name="enable-vibrancy">
       <default>true</default>
-      <summary>Enable Wallpaper Gradient Background</summary>
-      <description>Smoothly bridge the left and right dominant colors of the wallpaper to color the panel.</description>
+      <summary>Enable Vibrancy</summary>
+      <description>Enable macOS-style frosted glass panel vibrancy.</description>
     </key>
 
-    <key type="i" name="wallpaper-gradient-type">
-      <default>0</default>
-      <summary>Wallpaper Gradient Type</summary>
-      <description>Select the gradient type: 0 for Linear (2-point), 1 for Lenient (multi-stop translucent).</description>
+    <key type="i" name="vibrancy-blur-mode">
+      <default>3</default>
+      <summary>Vibrancy Blur Mode</summary>
+      <description>1 = Linear (radius 300), 2 = Lenient (radius 150), 3 = Auto.</description>
+    </key>
+
+    <key type="i" name="vibrancy-style">
+      <default>1</default>
+      <summary>Vibrancy Panel Style</summary>
+      <description>0 = Off, 1 = On (Big Sur adaptive), 2 = Always Light Panel in Light Mode. Requires vibrancy-blur-mode to be active.</description>
     </key>
     
   </schema>

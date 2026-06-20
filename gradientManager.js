@@ -3,7 +3,74 @@ import GdkPixbuf from 'gi://GdkPixbuf';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
+const userName = GLib.get_user_name();
+const CACHE_FILE = `/var/tmp/wack-shell-gradient-cache-${userName}.json`;
 const _cache = new Map();
+let _loaded = false;
+let _loadPromise = null;
+
+export function initCache() {
+    if (_loadPromise)
+        return _loadPromise;
+
+    _loadPromise = new Promise((resolve) => {
+        if (_loaded) {
+            resolve();
+            return;
+        }
+        _loaded = true;
+
+        const file = Gio.File.new_for_path(CACHE_FILE);
+        file.load_contents_async(null, (obj, res) => {
+            try {
+                const [success, contents] = file.load_contents_finish(res);
+                if (success) {
+                    const data = JSON.parse(new TextDecoder().decode(contents));
+                    if (data && data.__version__ === 'v1') {
+                        for (const [k, v] of Object.entries(data)) {
+                            if (k !== '__version__')
+                                _cache.set(k, v);
+                        }
+                    } else {
+                        file.delete_async(GLib.PRIORITY_DEFAULT, null, null);
+                    }
+                }
+            } catch (e) {
+                // File does not exist or JSON parsing failed; ignore.
+            }
+            resolve();
+        });
+    });
+
+    return _loadPromise;
+}
+
+function saveCache() {
+    try {
+        const obj = { __version__: 'v1' };
+        for (const [k, v] of _cache.entries())
+            obj[k] = v;
+        const data = JSON.stringify(obj);
+        const file = Gio.File.new_for_path(CACHE_FILE);
+        const bytes = new TextEncoder().encode(data);
+        file.replace_contents_async(
+            bytes,
+            null,
+            false,
+            Gio.FileCreateFlags.NONE,
+            null,
+            (obj2, res) => {
+                try {
+                    file.replace_contents_finish(res);
+                } catch (e) {
+                    console.error(`[WACK Shell/GradientManager] Failed to save persistent cache: ${e}`);
+                }
+            }
+        );
+    } catch (e) {
+        console.error(`[WACK Shell/GradientManager] Failed to save persistent cache: ${e}`);
+    }
+}
 
 function parseHexColor(hex) {
     if (!hex)
@@ -187,6 +254,8 @@ export async function getPanelGradientColors() {
         }
     }
 
+    await initCache();
+
     const cacheKey = `${targetUri}_${isColor}_${primaryColor}_${secondaryColor}_${shadingType}`;
     if (_cache.has(cacheKey))
         return _cache.get(cacheKey);
@@ -336,6 +405,7 @@ export async function getPanelGradientColors() {
 
         } catch (e) {
             console.error(`[WACK Shell/GradientManager] Failed to extract colors from wallpaper: ${e}`);
+            throw e;
         }
     }
 
@@ -481,9 +551,12 @@ export async function getPanelGradientColors() {
     };
 
     _cache.set(cacheKey, result);
+    saveCache();
     return result;
 }
 
 export function clearCache() {
     _cache.clear();
+    _loaded = false;
+    _loadPromise = null;
 }
