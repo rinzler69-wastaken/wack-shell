@@ -22,7 +22,7 @@ import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/
 
 import * as Constants from './constants.js';
 import { SelectionWindow } from './selection.js';
-import * as GradientManager from './gradientManager.js';
+import * as ColorManager from './colorManager.js';
 import { PanelBlur, RADIUS_LINEAR, RADIUS_LENIENT } from './panelBlur.js';
 
 const INACTIVE_WORKSPACE_DOT_SCALE = 0.75;
@@ -1062,7 +1062,7 @@ export default class WackShellExtension extends Extension {
             this._desktopSettings = null;
         }
 
-        GradientManager.clearCache();
+        ColorManager.clearCache();
         this._currentColors = null;
 
         this._settings.disconnectObject(this);
@@ -1549,7 +1549,7 @@ export default class WackShellExtension extends Extension {
             this._retryTimeoutId = 0;
         }
         try {
-            const colors = await GradientManager.getPanelGradientColors();
+            const colors = await ColorManager.getPanelColors();
             if (!this._settings || runId !== this._updateColorsId) return;
             this._currentColors = colors;
             this._retryCount = 0;

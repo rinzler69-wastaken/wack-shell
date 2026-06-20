@@ -63,12 +63,12 @@ function saveCache() {
                 try {
                     file.replace_contents_finish(res);
                 } catch (e) {
-                    console.error(`[WACK Shell/GradientManager] Failed to save persistent cache: ${e}`);
+                    logError(e, 'WACK Shell/ColorManager: Failed to save persistent cache');
                 }
             }
         );
     } catch (e) {
-        console.error(`[WACK Shell/GradientManager] Failed to save persistent cache: ${e}`);
+        logError(e, 'WACK Shell/ColorManager: Failed to save persistent cache');
     }
 }
 
@@ -171,7 +171,7 @@ function resolveSlideshowXml(xmlPath) {
                     return;
                 }
             } catch (e) {
-                console.error(`[WACK Shell/GradientManager] Failed to resolve XML slideshow: ${e}`);
+                logError(e, 'WACK Shell/ColorManager: Failed to resolve XML slideshow');
             }
             resolve(null);
         });
@@ -224,10 +224,10 @@ function getOverallAverageColor(pixels, channels, rowstride, visibleX, visibleY,
 }
 
 /**
- * Extract panel background gradient colors from the current desktop wallpaper.
+ * Extract panel background colors from the current desktop wallpaper.
  * Samples left-most, right-most, and center-most regions at the top of the wallpaper.
  */
-export async function getPanelGradientColors() {
+export async function getPanelColors() {
     const bgSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
     const interfaceSettings = new Gio.Settings({ schema: 'org.gnome.desktop.interface' });
 
@@ -404,7 +404,7 @@ export async function getPanelGradientColors() {
             overallChroma = (maxVal - minVal) / 255.0;
 
         } catch (e) {
-            console.error(`[WACK Shell/GradientManager] Failed to extract colors from wallpaper: ${e}`);
+            logError(e, 'WACK Shell/ColorManager: Failed to extract colors from wallpaper');
             throw e;
         }
     }
