@@ -106,6 +106,7 @@ export class PanelBlur {
         this._paintEffect = null;   // EmitPaintSignal (repaint hack)
         this._sigs = [];     // [[object, signalId], ...]
         this._bindings = [];     // Property bindings
+        this._sessionVisibilityTimeoutId = 0;
         this._enabled = false;
     }
 
@@ -176,12 +177,20 @@ export class PanelBlur {
         // 7. Hide in overview and lockscreen; show on desktop + Sonoma unlock fade
         //    Mirrors BMS update_visibility: !hasWindows == lockscreen/unlock-dialog
         const _updateSessionVisibility = () => {
-            if (!Main.sessionMode.hasWindows) {
-                this.hide();
-            } else {
-                if (!Main.overview.visible)
-                    this.show();
+            if (this._sessionVisibilityTimeoutId) {
+                GLib.source_remove(this._sessionVisibilityTimeoutId);
+                this._sessionVisibilityTimeoutId = 0;
             }
+            this._sessionVisibilityTimeoutId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._sessionVisibilityTimeoutId = 0;
+                if (!Main.sessionMode.hasWindows) {
+                    this.hideInstantly();
+                } else {
+                    if (!Main.overview.visible)
+                        this.show();
+                }
+                return GLib.SOURCE_REMOVE;
+            });
         };
         this._connect(Main.sessionMode, 'updated', _updateSessionVisibility);
         this._connect(Main.overview, 'showing', () => this.hideInstantly());
@@ -198,6 +207,11 @@ export class PanelBlur {
 
     disable() {
         if (!this._enabled) return;
+
+        if (this._sessionVisibilityTimeoutId) {
+            GLib.source_remove(this._sessionVisibilityTimeoutId);
+            this._sessionVisibilityTimeoutId = 0;
+        }
 
         for (const [obj, id] of this._sigs) {
             try { obj.disconnect(id); } catch { /* actor may be gone */ }

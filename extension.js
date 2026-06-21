@@ -1026,6 +1026,11 @@ export default class WackShellExtension extends Extension {
             this._sessionUpdatedId = null;
         }
 
+        if (this._proximityWriteCancellable) {
+            this._proximityWriteCancellable.cancel();
+            this._proximityWriteCancellable = null;
+        }
+
         this._destroyProximityTracking();
         this._unloadProximityStylesheet();
         this._clearPanelStyle();
@@ -1237,6 +1242,8 @@ export default class WackShellExtension extends Extension {
         this._customCssPath = GLib.build_filenamev([this.path, 'stylesheet-custom.css']);
         this._customCssFile = Gio.File.new_for_path(this._customCssPath);
         this._desktopSettings = new Gio.Settings({ schema: "org.gnome.desktop.interface" });
+        this._proximityRequestToken = 0;
+        this._proximityWriteCancellable = null;
 
         this._settings.connectObject(
             'changed::enable-panel-proximity', () => this._syncProximity(),
@@ -1334,10 +1341,16 @@ export default class WackShellExtension extends Extension {
     }
 
     _unloadProximityStylesheet() {
-        if (this._themeId) {
+        // Always attempt the unload rather than trusting _themeId bookkeeping —
+        // that flag can drift out of sync if an async write/load was superseded
+        // mid-flight. unload_stylesheet() on a file that isn't currently loaded
+        // is harmless, so calling it unconditionally is the safer default.
+        try {
             this._themeContext.get_theme().unload_stylesheet(this._customCssFile);
-            this._themeId = false;
+        } catch (e) {
+            // Nothing was loaded, or the theme context is already gone — ignore.
         }
+        this._themeId = false;
     }
 
     _isProximityDarkMode() {
@@ -1345,6 +1358,12 @@ export default class WackShellExtension extends Extension {
     }
 
     _updateProximityStylesheet() {
+        // Cancel any write/load still in flight from a previous (now stale) toggle
+        if (this._proximityWriteCancellable) {
+            this._proximityWriteCancellable.cancel();
+            this._proximityWriteCancellable = null;
+        }
+
         this._unloadProximityStylesheet();
 
         if (!this._settings.get_boolean('enable-panel-proximity')) {
@@ -1377,16 +1396,38 @@ export default class WackShellExtension extends Extension {
     color: ${fgCss} !important;
 }
 `;
-        try {
-            const bytes = new TextEncoder().encode(cssString);
-            this._customCssFile.replace_contents(bytes, null, false, Gio.FileCreateFlags.NONE, null);
-            this._themeContext.get_theme().load_stylesheet(this._customCssFile);
-            this._themeId = true;
-        } catch (e) {
-            logError(e, 'wack-shell-proximity: Error writing custom stylesheet');
-        }
+        const bytes = new TextEncoder().encode(cssString);
 
-        this._queueUpdatePanelVisibility();
+        const cancellable = new Gio.Cancellable();
+        this._proximityWriteCancellable = cancellable;
+        const requestToken = ++this._proximityRequestToken;
+
+        this._customCssFile.replace_contents_async(
+            bytes,
+            null,
+            false,
+            Gio.FileCreateFlags.NONE,
+            cancellable,
+            (file, res) => {
+                try {
+                    file.replace_contents_finish(res);
+                } catch (e) {
+                    if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                        logError(e, 'wack-shell-proximity: Error writing custom stylesheet');
+                    return; // cancelled or failed write — do NOT touch the theme
+                }
+
+                // A newer toggle has already superseded this write — bail, don't double-load
+                if (requestToken !== this._proximityRequestToken) return;
+                if (this._proximityWriteCancellable === cancellable)
+                    this._proximityWriteCancellable = null;
+                if (!this._settings) return;
+
+                this._themeContext.get_theme().load_stylesheet(this._customCssFile);
+                this._themeId = true;
+                this._queueUpdatePanelVisibility();
+            }
+        );
     }
 
     _queueUpdatePanelVisibility() {
@@ -1476,9 +1517,6 @@ export default class WackShellExtension extends Extension {
         }
 
         Main.panel.set_style(null); // Clear wallpaper gradient style so proximity takes precedence
-        if (this._currentColors) {
-            this._updateContrast(this._currentColors);
-        }
     }
 
     _clearPanelStyle() {

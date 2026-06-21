@@ -254,7 +254,7 @@ export async function getPanelColors() {
         }
     }
 
-    _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath);
+    await _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath);
 
     await initCache();
 
@@ -563,7 +563,145 @@ export function clearCache() {
     _loadPromise = null;
 }
 
-function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath) {
+function loadFileContents(file) {
+    return new Promise((resolve) => {
+        file.load_contents_async(null, (obj, res) => {
+            try {
+                const [success, contents] = file.load_contents_finish(res);
+                resolve(success ? contents : null);
+            } catch (e) {
+                resolve(null);
+            }
+        });
+    });
+}
+
+function replaceFileContents(file, bytes) {
+    return new Promise((resolve, reject) => {
+        file.replace_contents_async(
+            bytes,
+            null,
+            false,
+            Gio.FileCreateFlags.REPLACE_DESTINATION,
+            null,
+            (obj, res) => {
+                try {
+                    file.replace_contents_finish(res);
+                    resolve();
+                } catch (e) {
+                    reject(e);
+                }
+            }
+        );
+    });
+}
+
+function fileExists(file) {
+    return new Promise((resolve) => {
+        file.query_info_async(
+            Gio.FILE_ATTRIBUTE_STANDARD_TYPE,
+            Gio.FileQueryInfoFlags.NONE,
+            GLib.PRIORITY_DEFAULT,
+            null,
+            (obj, res) => {
+                try {
+                    file.query_info_finish(res);
+                    resolve(true);
+                } catch (e) {
+                    resolve(false);
+                }
+            }
+        );
+    });
+}
+
+function copyFile(srcFile, destFile) {
+    return new Promise((resolve, reject) => {
+        srcFile.copy_async(
+            destFile,
+            Gio.FileCopyFlags.OVERWRITE,
+            GLib.PRIORITY_DEFAULT,
+            null,
+            null,
+            (obj, res) => {
+                try {
+                    srcFile.copy_finish(res);
+                    resolve();
+                } catch (e) {
+                    reject(e);
+                }
+            }
+        );
+    });
+}
+
+function setFilePermissions(file, mode) {
+    return new Promise((resolve) => {
+        file.set_attribute_uint32_async(
+            'unix::mode',
+            mode,
+            Gio.FileQueryInfoFlags.NONE,
+            GLib.PRIORITY_DEFAULT,
+            null,
+            (obj, res) => {
+                try {
+                    file.set_attribute_finish(res);
+                } catch (e) { }
+                resolve();
+            }
+        );
+    });
+}
+
+function loadPixbufFromStream(stream) {
+    return new Promise((resolve, reject) => {
+        GdkPixbuf.Pixbuf.new_from_stream_async(stream, null, (obj, res) => {
+            try {
+                const pb = GdkPixbuf.Pixbuf.new_from_stream_finish(res);
+                resolve(pb);
+            } catch (e) {
+                reject(e);
+            }
+        });
+    });
+}
+
+function savePixbufToFile(pixbuf, destFile) {
+    return new Promise((resolve, reject) => {
+        destFile.replace_async(null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, GLib.PRIORITY_DEFAULT, null, (obj, res) => {
+            try {
+                const outputStream = destFile.replace_finish(res);
+                pixbuf.save_to_streamv_async(
+                    outputStream,
+                    'jpeg',
+                    ['quality'],
+                    ['80'],
+                    null,
+                    (pbObj, pbRes) => {
+                        try {
+                            pixbuf.save_to_stream_finish(pbRes);
+                            outputStream.close_async(GLib.PRIORITY_DEFAULT, null, (streamObj, closeRes) => {
+                                try {
+                                    outputStream.close_finish(closeRes);
+                                } catch (ce) { }
+                                resolve();
+                            });
+                        } catch (e) {
+                            try {
+                                outputStream.close(null);
+                            } catch (ce) { }
+                            reject(e);
+                        }
+                    }
+                );
+            } catch (e) {
+                reject(e);
+            }
+        });
+    });
+}
+
+async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath) {
     try {
         const userName = GLib.get_user_name();
         const style = bgSettings.get_enum('picture-options');
@@ -579,10 +717,10 @@ function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath
         const metaFile = Gio.File.new_for_path(`/var/tmp/wack-shared-wallpaper-${userName}.json`);
         let metadataMatches = false;
 
-        if (metaFile.query_exists(null)) {
+        if (await fileExists(metaFile)) {
             try {
-                const [loadSuccess, contents] = metaFile.load_contents(null);
-                if (loadSuccess) {
+                const contents = await loadFileContents(metaFile);
+                if (contents) {
                     const existingMetadata = JSON.parse(new TextDecoder().decode(contents));
                     const currentPrimary = bgSettings.get_string('primary-color');
                     const currentSecondary = bgSettings.get_string('secondary-color');
@@ -604,7 +742,7 @@ function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath
 
                         if (metadataMatches && !isColor) {
                             const fileToCheck = Gio.File.new_for_path(targetPath);
-                            if (!fileToCheck.query_exists(null))
+                            if (!(await fileExists(fileToCheck)))
                                 metadataMatches = false;
                         }
                     }
@@ -624,10 +762,23 @@ function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath
                 realSrcFile = Gio.File.new_for_uri(uri);
             }
 
-            if (realSrcFile && realSrcFile.query_exists(null)) {
+            if (realSrcFile && (await fileExists(realSrcFile))) {
                 try {
-                    const srcPath = realSrcFile.get_path();
-                    const pixbuf = GdkPixbuf.Pixbuf.new_from_file(srcPath);
+                    const readStream = await new Promise((resolve, reject) => {
+                        realSrcFile.read_async(GLib.PRIORITY_DEFAULT, null, (obj, res) => {
+                            try {
+                                resolve(realSrcFile.read_finish(res));
+                            } catch (e) {
+                                reject(e);
+                            }
+                        });
+                    });
+
+                    const pixbuf = await loadPixbufFromStream(readStream);
+                    try {
+                        readStream.close(null);
+                    } catch (ce) { }
+
                     const w = pixbuf.get_width();
                     const h = pixbuf.get_height();
 
@@ -645,10 +796,9 @@ function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath
                     }
 
                     const scaled = pixbuf.scale_simple(scaleW, scaleH, GdkPixbuf.InterpType.BILINEAR);
-                    scaled.savev(targetPath, 'jpeg', ['quality'], ['80']);
-
                     const destFile = Gio.File.new_for_path(targetPath);
-                    destFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
+                    await savePixbufToFile(scaled, destFile);
+                    await setFilePermissions(destFile, 0o644);
                     success = true;
                 } catch (err) {
                     try {
@@ -659,8 +809,8 @@ function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath
                             srcExt = srcPath.substring(lastDot);
                         targetPath = `/var/tmp/wack-shared-wallpaper-${userName}${srcExt}`;
                         const destFile = Gio.File.new_for_path(targetPath);
-                        realSrcFile.copy(destFile, Gio.FileCopyFlags.OVERWRITE, null, null);
-                        destFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
+                        await copyFile(realSrcFile, destFile);
+                        await setFilePermissions(destFile, 0o644);
                         success = true;
                     } catch (copyErr) {
                         // Ignore
@@ -683,14 +833,9 @@ function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath
             clockFormat: interfaceSettings.get_string('clock-format'),
         };
 
-        metaFile.replace_contents(
-            JSON.stringify(metadata),
-            null,
-            false,
-            Gio.FileCreateFlags.REPLACE_DESTINATION,
-            null
-        );
-        metaFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
+        const bytes = new TextEncoder().encode(JSON.stringify(metadata));
+        await replaceFileContents(metaFile, bytes);
+        await setFilePermissions(metaFile, 0o644);
     } catch (e) {
         // Ignore
     }
