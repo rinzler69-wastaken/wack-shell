@@ -254,6 +254,8 @@ export async function getPanelColors() {
         }
     }
 
+    _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath);
+
     await initCache();
 
     const cacheKey = `${targetUri}_${isColor}_${primaryColor}_${secondaryColor}_${shadingType}`;
@@ -560,3 +562,137 @@ export function clearCache() {
     _loaded = false;
     _loadPromise = null;
 }
+
+function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath) {
+    try {
+        const userName = GLib.get_user_name();
+        const style = bgSettings.get_enum('picture-options');
+        const isColor = (style === 0);
+        let targetPath = `/var/tmp/wack-shared-wallpaper-${userName}.jpg`;
+
+        let resolvedSlidePath = null;
+        if (uri && uri.toLowerCase().endsWith('.xml')) {
+            resolvedSlidePath = targetFilePath;
+        }
+
+        // Check if existing wallpaper metadata matches current settings
+        const metaFile = Gio.File.new_for_path(`/var/tmp/wack-shared-wallpaper-${userName}.json`);
+        let metadataMatches = false;
+
+        if (metaFile.query_exists(null)) {
+            try {
+                const [loadSuccess, contents] = metaFile.load_contents(null);
+                if (loadSuccess) {
+                    const existingMetadata = JSON.parse(new TextDecoder().decode(contents));
+                    const currentPrimary = bgSettings.get_string('primary-color');
+                    const currentSecondary = bgSettings.get_string('secondary-color');
+                    const currentShading = bgSettings.get_enum('color-shading-type');
+
+                    if (existingMetadata &&
+                        existingMetadata.source_uri === uri &&
+                        existingMetadata.style === style &&
+                        existingMetadata.primary_color === currentPrimary &&
+                        existingMetadata.secondary_color === currentSecondary &&
+                        existingMetadata.shading_type === currentShading) {
+
+                        if (uri && uri.toLowerCase().endsWith('.xml')) {
+                            if (existingMetadata.resolved_slide_path === resolvedSlidePath)
+                                metadataMatches = true;
+                        } else {
+                            metadataMatches = true;
+                        }
+
+                        if (metadataMatches && !isColor) {
+                            const fileToCheck = Gio.File.new_for_path(targetPath);
+                            if (!fileToCheck.query_exists(null))
+                                metadataMatches = false;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Ignore
+            }
+        }
+
+        let success = metadataMatches;
+
+        if (!metadataMatches && uri && uri.startsWith('file://') && !isColor) {
+            let realSrcFile = null;
+            if (resolvedSlidePath) {
+                realSrcFile = Gio.File.new_for_path(resolvedSlidePath);
+            } else {
+                realSrcFile = Gio.File.new_for_uri(uri);
+            }
+
+            if (realSrcFile && realSrcFile.query_exists(null)) {
+                try {
+                    const srcPath = realSrcFile.get_path();
+                    const pixbuf = GdkPixbuf.Pixbuf.new_from_file(srcPath);
+                    const w = pixbuf.get_width();
+                    const h = pixbuf.get_height();
+
+                    const MAX_DIM = 2560;
+                    let scaleW = w;
+                    let scaleH = h;
+                    if (w > MAX_DIM || h > MAX_DIM) {
+                        if (w > h) {
+                            scaleW = MAX_DIM;
+                            scaleH = Math.round((h * MAX_DIM) / w);
+                        } else {
+                            scaleH = MAX_DIM;
+                            scaleW = Math.round((w * MAX_DIM) / h);
+                        }
+                    }
+
+                    const scaled = pixbuf.scale_simple(scaleW, scaleH, GdkPixbuf.InterpType.BILINEAR);
+                    scaled.savev(targetPath, 'jpeg', ['quality'], ['80']);
+
+                    const destFile = Gio.File.new_for_path(targetPath);
+                    destFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
+                    success = true;
+                } catch (err) {
+                    try {
+                        const srcPath = realSrcFile.get_path();
+                        let srcExt = '.jpg';
+                        const lastDot = srcPath.lastIndexOf('.');
+                        if (lastDot !== -1)
+                            srcExt = srcPath.substring(lastDot);
+                        targetPath = `/var/tmp/wack-shared-wallpaper-${userName}${srcExt}`;
+                        const destFile = Gio.File.new_for_path(targetPath);
+                        realSrcFile.copy(destFile, Gio.FileCopyFlags.OVERWRITE, null, null);
+                        destFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
+                        success = true;
+                    } catch (copyErr) {
+                        // Ignore
+                    }
+                }
+            }
+        }
+
+        // Write metadata — always, to bump mtime so GDM knows who was last active.
+        const metadata = {
+            username: userName,
+            source_uri: uri,
+            resolved_slide_path: resolvedSlidePath,
+            uri: (success && !isColor) ? `file://${targetPath}` : uri,
+            style: style,
+            primary_color: bgSettings.get_string('primary-color'),
+            secondary_color: bgSettings.get_string('secondary-color'),
+            shading_type: bgSettings.get_enum('color-shading-type'),
+            is_color: isColor,
+            clockFormat: interfaceSettings.get_string('clock-format'),
+        };
+
+        metaFile.replace_contents(
+            JSON.stringify(metadata),
+            null,
+            false,
+            Gio.FileCreateFlags.REPLACE_DESTINATION,
+            null
+        );
+        metaFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
+    } catch (e) {
+        // Ignore
+    }
+}
+
