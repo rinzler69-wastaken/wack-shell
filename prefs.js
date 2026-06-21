@@ -235,17 +235,16 @@ export default class WackShellPreferences extends ExtensionPreferences {
         window.add(homePage);
 
         // =====================================================================
-        // -- PAGE 2: GENERAL CONFIGURATION ------------------------------------
+        // -- PAGE 2: PANEL CONFIGURATION --------------------------------------
         // =====================================================================
         const generalPage = new Adw.PreferencesPage({
-            title: 'General',
+            title: 'Panel',
             icon_name: 'preferences-system-symbolic',
         });
 
-        // Group 2.1: Visibility Controls
+        // Group 2.1: Panel Objects
         const visibilityGroup = new Adw.PreferencesGroup({
-            title: 'Visibility Controls',
-            description: 'Choose which elements to show in the panel. Native Activities button is hidden by default.',
+            title: 'Panel Objects',
         });
 
         visibilityGroup.add(this._buildSwitchRow(
@@ -428,7 +427,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
 
         const vibrancyRow = new Adw.SwitchRow({
             title: 'Enable/Disable Vibrancy',
-            subtitle: 'Apply a dynamic, wallpaper-aware frosted glass effect to the panel'
+            subtitle: 'Apply a wallpaper-aware, blur-driven frosted glass effect to the panel'
         });
         vibrancyGroup.add(vibrancyRow);
 
@@ -452,7 +451,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
 
         // 2. Blur Mode Row
         const blurModeRow = new Adw.ActionRow({
-            title: 'Blur Mode',
+            title: 'Gradient Mode',
         });
         vibrancyGroup.add(blurModeRow);
 
@@ -478,7 +477,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
         blurModeRow.add_suffix(blurModeBox);
 
         const BLUR_DESCRIPTIONS = [
-            'Dynamically determines the optimal blur mode based on the active wallpaper',
+            'Dynamically determines the optimal gradient mode based on the active wallpaper',
             'Tighter blur radius, best for wallpapers with simpler gradients',
             'Looser blur radius, optimised for wallpapers with multi-stop gradients'
         ];
@@ -700,10 +699,10 @@ export default class WackShellPreferences extends ExtensionPreferences {
         window.add(generalPage);
 
         // =====================================================================
-        // -- PAGE 3: LOGO CUSTOMIZATION ---------------------------------------
+        // -- PAGE 3: LOGO & MENU CUSTOMIZATION --------------------------------
         // =====================================================================
         const logoPage = new Adw.PreferencesPage({
-            title: 'Logo Options',
+            title: 'Logo Menu',
             icon_name: 'image-x-generic-symbolic',
         });
 
@@ -813,19 +812,10 @@ export default class WackShellPreferences extends ExtensionPreferences {
         labelGroup.add(labelTextRow);
 
         logoPage.add(labelGroup);
-        window.add(logoPage);
-
-        // =====================================================================
-        // -- PAGE 4: MENU CUSTOMIZATION ---------------------------------------
-        // =====================================================================
-        const menuPage = new Adw.PreferencesPage({
-            title: 'Menu Options',
-            icon_name: 'open-menu-symbolic',
-        });
 
         const menuItemsGroup = new Adw.PreferencesGroup({
-            title: 'Logo Menu Contents',
-            description: 'Choose which options are displayed in the Logo system menu',
+            title: 'Contents',
+            description: 'Choose which options are displayed in the Logo Menu dropdown',
         });
 
         menuItemsGroup.add(this._buildSwitchRow(
@@ -859,7 +849,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
             'Hide Software Center Option',
             'Remove Software Center launcher option'
         ));
-        menuPage.add(menuItemsGroup);
+        logoPage.add(menuItemsGroup);
 
         const commandsGroup = new Adw.PreferencesGroup({
             title: 'Application Commands',
@@ -887,11 +877,21 @@ export default class WackShellPreferences extends ExtensionPreferences {
             'System Monitor Command'
         ));
 
+        logoPage.add(commandsGroup);
+
+        // Group 3.5: Extras
+        const extrasGroup = new Adw.PreferencesGroup({
+            title: 'Extras',
+        });
+
         // Cupertino About Pane status row
-        const aboutPaneRow = new Adw.ActionRow({ title: 'Cupertino About Pane' });
+        const aboutPaneRow = new Adw.ActionRow({
+            title: 'Cupertino About Pane',
+            subtitle: 'Open a custom macOS-style "About This PC" dialog',
+        });
         const aboutPaneStatusLabel = new Gtk.Label({
             label: 'Checking...',
-            css_classes: ['dim-label'],
+            valign: Gtk.Align.CENTER,
         });
         aboutPaneRow.add_suffix(aboutPaneStatusLabel);
 
@@ -906,8 +906,28 @@ export default class WackShellPreferences extends ExtensionPreferences {
 
         if (_checkAboutPane()) {
             aboutPaneStatusLabel.label = 'Active';
+            try {
+                const provider = new Gtk.CssProvider();
+                provider.load_from_data(`
+                    label.success-pill {
+                        background-color: #2ec27e;
+                        color: white;
+                        font-weight: bold;
+                        padding: 2px 10px;
+                        border-radius: 9999px;
+                    }
+                `);
+                aboutPaneStatusLabel.get_style_context().add_provider(
+                    provider,
+                    Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                );
+                aboutPaneStatusLabel.css_classes = ['success-pill'];
+            } catch (e) {
+                aboutPaneStatusLabel.css_classes = ['success', 'pill'];
+            }
         } else {
             aboutPaneStatusLabel.label = 'Not installed';
+            aboutPaneStatusLabel.css_classes = ['dim-label'];
             const installBtn = new Gtk.Button({
                 icon_name: 'adw-external-link-symbolic',
                 tooltip_text: 'Get Cupertino About Pane',
@@ -920,10 +940,9 @@ export default class WackShellPreferences extends ExtensionPreferences {
             aboutPaneRow.add_suffix(installBtn);
         }
 
-        commandsGroup.add(aboutPaneRow);
-
-        menuPage.add(commandsGroup);
-        window.add(menuPage);
+        extrasGroup.add(aboutPaneRow);
+        logoPage.add(extrasGroup);
+        window.add(logoPage);
 
         // Clean up connections on destroy (M5)
         window.connect('destroy', () => {
