@@ -1,6 +1,6 @@
 export const SymbolicDistroIcons = [
-    { PATH: '/Resources/apple-icon-symbolic.svg' }, // Apple (Wackintosh) (index 0)
-    { PATH: 'start-here-symbolic' },                 // Default (index 1)
+    { PATH: 'start-here-symbolic' },                 // Default (index 0)
+    { PATH: '/Resources/apple-icon-symbolic.svg' }, // Apple (Wackintosh) (index 1)
     { PATH: '/Resources/fedora-logo-symbolic.svg' }, // Fedora (index 2)
     { PATH: '/Resources/debian-logo-symbolic.svg' }, // Debian (index 3)
     { PATH: '/Resources/manjaro-logo-symbolic.svg' },// Manjaro (index 4)
@@ -36,8 +36,8 @@ export const SymbolicDistroIcons = [
 ];
 
 export const ColouredDistroIcons = [
-    { PATH: '/Resources/apple-icon-symbolic.svg' }, // Apple (Wackintosh) (index 0)
-    { PATH: 'start-here-symbolic' },                 // Default (index 1)
+    { PATH: 'start-here-symbolic' },                 // Default (index 0)
+    { PATH: '/Resources/apple-icon-symbolic.svg' }, // Apple (Wackintosh) (index 1)
     { PATH: '/Resources/fedora-logo.svg' },          // Fedora (index 2)
     { PATH: '/Resources/debian-logo.svg' },          // Debian (index 3)
     { PATH: '/Resources/manjaro-logo.svg' },         // Manjaro (index 4)

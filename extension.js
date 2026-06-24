@@ -394,7 +394,7 @@ const WackLogoButton = GObject.registerClass(
 
             // Validate path exists, fallback to default Apple logo
             if (logoPath.startsWith('/') && !GLib.file_test(logoPath, GLib.FileTest.IS_REGULAR)) {
-                logoPath = this._extension.path + '/Resources/apple-icon-symbolic.svg';
+                logoPath = 'start-here-symbolic';
             }
 
             try {
@@ -1192,10 +1192,10 @@ export default class WackShellExtension extends Extension {
             const workspace = global.workspace_manager.get_active_workspace();
             const windows = workspace.list_windows().filter(metaWindow => {
                 return !metaWindow.is_hidden() &&
-                       metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
-                       !metaWindow.is_attached_dialog() &&
-                       !metaWindow.maximized_horizontally &&
-                       !metaWindow.maximized_vertically;
+                    metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
+                    !metaWindow.is_attached_dialog() &&
+                    !metaWindow.maximized_horizontally &&
+                    !metaWindow.maximized_vertically;
             });
             windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
         } catch (err) {
@@ -1207,7 +1207,7 @@ export default class WackShellExtension extends Extension {
             actor.remove_all_transitions();
 
             const isDialog = actor.meta_window.get_window_type() === Meta.WindowType.DIALOG ||
-                             actor.meta_window.get_window_type() === Meta.WindowType.MODAL_DIALOG;
+                actor.meta_window.get_window_type() === Meta.WindowType.MODAL_DIALOG;
 
             if (isDialog) {
                 actor.set_pivot_point(0.5, 0.5);
@@ -1410,11 +1410,13 @@ export default class WackShellExtension extends Extension {
         ];
 
         if (!meta_window_actor.meta_window) {
-            signals.push({ object: meta_window_actor, id: meta_window_actor.connect('notify::meta-window', () => {
-                if (meta_window_actor.meta_window) {
-                    signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._queueUpdatePanelVisibility()) });
-                }
-            }) });
+            signals.push({
+                object: meta_window_actor, id: meta_window_actor.connect('notify::meta-window', () => {
+                    if (meta_window_actor.meta_window) {
+                        signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._queueUpdatePanelVisibility()) });
+                    }
+                })
+            });
         } else {
             signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._queueUpdatePanelVisibility()) });
         }
@@ -1732,9 +1734,9 @@ export default class WackShellExtension extends Extension {
 
         // React to our own settings changes
         this._settings.connectObject(
-            'changed::enable-vibrancy',    () => this._syncVibrancy(),
+            'changed::enable-vibrancy', () => this._syncVibrancy(),
             'changed::vibrancy-blur-mode', () => this._syncVibrancy(),
-            'changed::vibrancy-style',     () => this._syncVibrancy(),
+            'changed::vibrancy-style', () => this._syncVibrancy(),
             this
         );
 
@@ -1764,7 +1766,7 @@ export default class WackShellExtension extends Extension {
 
     _initBmsSettings() {
         if (this._vibrancyBmsSig && this._bmsSettings) {
-            try { this._bmsSettings.disconnect(this._vibrancyBmsSig); } catch {}
+            try { this._bmsSettings.disconnect(this._vibrancyBmsSig); } catch { }
             this._vibrancyBmsSig = null;
             this._bmsSettings = null;
         }
@@ -1934,7 +1936,7 @@ export default class WackShellExtension extends Extension {
         // Lenient if center has a contrasting hue stop relative to left/right,
         // OR if we have a wide, distinct three-color transition stop (Ventura Dark)
         return (diffLC > 35 && diffCR > 35 && linearityError > 30) ||
-               (diffLC > 18 && diffCR > 18 && diffLR > 45);
+            (diffLC > 18 && diffCR > 18 && diffLR > 45);
     }
 
     /**
@@ -1985,9 +1987,9 @@ export default class WackShellExtension extends Extension {
 
     /** Called when color scheme or style changes — re-applies panel CSS. */
     _applyVibrancyStyle() {
-        const enabled  = this._settings.get_boolean('enable-vibrancy');
+        const enabled = this._settings.get_boolean('enable-vibrancy');
         const blurMode = this._settings.get_int('vibrancy-blur-mode');
-        const style    = this._settings.get_int('vibrancy-style');
+        const style = this._settings.get_int('vibrancy-style');
         const bmsConflict = this._bmsHasPanelBlur();
         const vibrancyClasses = ['panel-ventura-light', 'panel-bigsur'];
 
@@ -2137,12 +2139,12 @@ export default class WackShellExtension extends Extension {
         if (this._extStateChangedId) {
             try {
                 Main.extensionManager.disconnect(this._extStateChangedId);
-            } catch {}
+            } catch { }
             this._extStateChangedId = 0;
         }
 
         if (this._vibrancyStyleActive) {
-            try { Main.panel.set_style(null); } catch {}
+            try { Main.panel.set_style(null); } catch { }
             this._vibrancyStyleActive = false;
         }
     }

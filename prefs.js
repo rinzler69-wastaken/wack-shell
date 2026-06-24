@@ -6,8 +6,8 @@ import Gdk from 'gi://Gdk';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const DISTRO_LOGOS = [
-    "Apple (Wackintosh)",
     "Default",
+    "Apple (Wackintosh)",
     "Fedora",
     "Debian",
     "Manjaro",
@@ -715,7 +715,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
             settingsSignalIds,
             'logo-icon-image',
             'Distro Logo Image',
-            'Select pre-defined distro logo (Apple logo is default)',
+            'Select pre-defined distro logo',
             DISTRO_LOGOS
         ));
 

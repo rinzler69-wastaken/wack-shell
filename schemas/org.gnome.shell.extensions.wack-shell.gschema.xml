@@ -49,7 +49,7 @@
     <key type="i" name="logo-icon-image">
       <default>0</default>
       <summary>Pre-defined Logo Image</summary>
-      <description>Select pre-defined logo index (0: Wackintosh/Apple, 1: Fedora, 2: Debian, etc.).</description>
+      <description>Select pre-defined logo index.</description>
     </key>
 
     <key type="b" name="symbolic-logo">
