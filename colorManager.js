@@ -97,85 +97,91 @@ function getLuminance(r, g, b) {
 }
 
 function resolveSlideshowXml(xmlPath) {
-    return new Promise((resolve) => {
+    try {
         const file = Gio.File.new_for_path(xmlPath);
-        file.load_contents_async(null, (obj, res) => {
-            try {
-                const [success, content] = file.load_contents_finish(res);
-                if (!success || !content) {
-                    resolve(null);
-                    return;
-                }
+        if (!file.query_exists(null))
+            return null;
 
-                const xmlStr = new TextDecoder('utf-8').decode(content);
+        const [success, content] = file.load_contents(null);
+        if (!success || !content)
+            return null;
 
-                // Parse starttime
-                const starttimeMatch = xmlStr.match(/<starttime>([\s\S]*?)<\/starttime>/);
-                let startYear = 2020, startMonth = 0, startDay = 1, startHour = 0, startMin = 0, startSec = 0;
-                if (starttimeMatch) {
-                    const inner = starttimeMatch[1];
-                    const yearM = inner.match(/<year>(\d+)<\/year>/);
-                    const monthM = inner.match(/<month>(\d+)<\/month>/);
-                    const dayM = inner.match(/<day>(\d+)<\/day>/);
-                    const hourM = inner.match(/<hour>(\d+)<\/hour>/);
-                    const minM = inner.match(/<minute>(\d+)<\/minute>/);
-                    const secM = inner.match(/<second>(\d+)<\/second>/);
-                    if (yearM) startYear = parseInt(yearM[1], 10);
-                    if (monthM) startMonth = parseInt(monthM[1], 10) - 1;
-                    if (dayM) startDay = parseInt(dayM[1], 10);
-                    if (hourM) startHour = parseInt(hourM[1], 10);
-                    if (minM) startMin = parseInt(minM[1], 10);
-                    if (secM) startSec = parseInt(secM[1], 10);
-                }
-                const startDate = new Date(startYear, startMonth, startDay, startHour, startMin, startSec);
+        const xmlStr = new TextDecoder('utf-8').decode(content);
 
-                // Parse static and transition blocks in order
-                const blockRegex = /<(static|transition)[^>]*>([\s\S]*?)<\/\1>/g;
-                const blocks = [];
-                let totalDuration = 0;
-                let match;
-                while ((match = blockRegex.exec(xmlStr)) !== null) {
-                    const type = match[1];
-                    const inner = match[2];
-                    const durM = inner.match(/<duration>([\d.]+)<\/duration>/);
-                    const duration = durM ? parseFloat(durM[1]) : 0;
+        // Parse starttime
+        const yearMatch = xmlStr.match(/<year>\s*(\d+)\s*<\/year>/);
+        const monthMatch = xmlStr.match(/<month>\s*(\d+)\s*<\/month>/);
+        const dayMatch = xmlStr.match(/<day>\s*(\d+)\s*<\/day>/);
+        const hourMatch = xmlStr.match(/<hour>\s*(\d+)\s*<\/hour>/);
+        const minuteMatch = xmlStr.match(/<minute>\s*(\d+)\s*<\/minute>/);
+        const secondMatch = xmlStr.match(/<second>\s*(\d+)\s*<\/second>/);
 
-                    let fileStr = '';
-                    if (type === 'static') {
-                        const fileM = inner.match(/<file>([\s\S]*?)<\/file>/);
-                        fileStr = fileM ? fileM[1].trim() : '';
-                    } else {
-                        const fromM = inner.match(/<from>([\s\S]*?)<\/from>/);
-                        fileStr = fromM ? fromM[1].trim() : '';
-                    }
+        const hasStartTime = yearMatch && monthMatch && dayMatch;
 
-                    blocks.push({ type, duration, file: fileStr });
-                    totalDuration += duration;
-                }
+        // Parse static and transition blocks in order
+        const items = [];
+        const blockRegex = /<(static|transition)[^>]*>([\s\S]*?)<\/\1>/g;
+        let match;
+        while ((match = blockRegex.exec(xmlStr)) !== null) {
+            const type = match[1];
+            const inner = match[2];
+            const durationMatch = inner.match(/<duration>\s*([\d.]+)\s*<\/duration>/);
+            const duration = durationMatch ? parseFloat(durationMatch[1]) : 0;
 
-                if (totalDuration > 0 && blocks.length > 0) {
-                    const now = new Date();
-                    let diffSeconds = (now.getTime() - startDate.getTime()) / 1000.0;
-                    let offset = diffSeconds % totalDuration;
-                    if (offset < 0)
-                        offset += totalDuration;
-
-                    for (const block of blocks) {
-                        if (offset <= block.duration) {
-                            resolve(block.file);
-                            return;
-                        }
-                        offset -= block.duration;
-                    }
-                    resolve(blocks[0].file);
-                    return;
-                }
-            } catch (e) {
-                logError(e, 'WACK Shell/ColorManager: Failed to resolve XML slideshow');
+            if (type === 'static') {
+                const fileMatch = inner.match(/<file>\s*([^<]+)\s*<\/file>/);
+                if (fileMatch)
+                    items.push({ type: 'static', duration, file: fileMatch[1].trim() });
+            } else if (type === 'transition') {
+                const fromMatch = inner.match(/<from>\s*([^<]+)\s*<\/from>/);
+                const toMatch = inner.match(/<to>\s*([^<]+)\s*<\/to>/);
+                if (fromMatch && toMatch)
+                    items.push({ type: 'transition', duration, from: fromMatch[1].trim(), to: toMatch[1].trim() });
             }
-            resolve(null);
-        });
-    });
+        }
+
+        if (hasStartTime && items.length > 0) {
+            const year = parseInt(yearMatch[1], 10);
+            const month = parseInt(monthMatch[1], 10) - 1;
+            const day = parseInt(dayMatch[1], 10);
+            const hour = hourMatch ? parseInt(hourMatch[1], 10) : 0;
+            const minute = minuteMatch ? parseInt(minuteMatch[1], 10) : 0;
+            const second = secondMatch ? parseInt(secondMatch[1], 10) : 0;
+
+            const startDate = new Date(year, month, day, hour, minute, second);
+            const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startDate.getTime()) / 1000));
+
+            let totalCycleDuration = 0;
+            for (const item of items)
+                totalCycleDuration += item.duration;
+
+            if (totalCycleDuration > 0) {
+                const position = elapsedSeconds % totalCycleDuration;
+                let accumulated = 0;
+                for (const item of items) {
+                    if (position >= accumulated && position < accumulated + item.duration) {
+                        if (item.type === 'static')
+                            return item.file;
+                        else {
+                            const progress = (position - accumulated) / item.duration;
+                            return progress < 0.5 ? item.from : item.to;
+                        }
+                    }
+                    accumulated += item.duration;
+                }
+            }
+        }
+
+        // Fallback to first file if timing resolution failed
+        if (items.length > 0) {
+            const firstFile = items[0].file || items[0].from;
+            if (firstFile)
+                return firstFile;
+        }
+    } catch (e) {
+        logError(e, 'WACK Shell/ColorManager: Failed to resolve XML slideshow');
+    }
+    return null;
 }
 
 function sampleRegion(pixels, channels, rowstride, xStart, xEnd, yStart, yEnd) {
@@ -244,7 +250,7 @@ export async function getPanelColors() {
     if (uri && uri.startsWith('file://')) {
         const filePath = Gio.File.new_for_uri(uri).get_path();
         if (filePath && filePath.endsWith('.xml')) {
-            const resolvedPath = await resolveSlideshowXml(filePath);
+            const resolvedPath = resolveSlideshowXml(filePath);
             if (resolvedPath) {
                 targetFilePath = resolvedPath;
                 targetUri = GLib.filename_to_uri(resolvedPath, null);
@@ -254,7 +260,7 @@ export async function getPanelColors() {
         }
     }
 
-    await _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath);
+    _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath);
 
     await initCache();
 
@@ -563,153 +569,18 @@ export function clearCache() {
     _loadPromise = null;
 }
 
-function loadFileContents(file) {
-    return new Promise((resolve) => {
-        file.load_contents_async(null, (obj, res) => {
-            try {
-                const [success, contents] = file.load_contents_finish(res);
-                resolve(success ? contents : null);
-            } catch (e) {
-                resolve(null);
-            }
-        });
-    });
-}
 
-function replaceFileContents(file, bytes) {
-    return new Promise((resolve, reject) => {
-        file.replace_contents_async(
-            bytes,
-            null,
-            false,
-            Gio.FileCreateFlags.REPLACE_DESTINATION,
-            null,
-            (obj, res) => {
-                try {
-                    file.replace_contents_finish(res);
-                    resolve();
-                } catch (e) {
-                    reject(e);
-                }
-            }
-        );
-    });
-}
 
-function fileExists(file) {
-    return new Promise((resolve) => {
-        file.query_info_async(
-            Gio.FILE_ATTRIBUTE_STANDARD_TYPE,
-            Gio.FileQueryInfoFlags.NONE,
-            GLib.PRIORITY_DEFAULT,
-            null,
-            (obj, res) => {
-                try {
-                    file.query_info_finish(res);
-                    resolve(true);
-                } catch (e) {
-                    resolve(false);
-                }
-            }
-        );
-    });
-}
-
-function copyFile(srcFile, destFile) {
-    return new Promise((resolve, reject) => {
-        srcFile.copy_async(
-            destFile,
-            Gio.FileCopyFlags.OVERWRITE,
-            GLib.PRIORITY_DEFAULT,
-            null,
-            null,
-            (obj, res) => {
-                try {
-                    srcFile.copy_finish(res);
-                    resolve();
-                } catch (e) {
-                    reject(e);
-                }
-            }
-        );
-    });
-}
-
-function setFilePermissions(file, mode) {
-    return new Promise((resolve) => {
-        file.set_attribute_uint32_async(
-            'unix::mode',
-            mode,
-            Gio.FileQueryInfoFlags.NONE,
-            GLib.PRIORITY_DEFAULT,
-            null,
-            (obj, res) => {
-                try {
-                    file.set_attribute_finish(res);
-                } catch (e) { }
-                resolve();
-            }
-        );
-    });
-}
-
-function loadPixbufFromStream(stream) {
-    return new Promise((resolve, reject) => {
-        GdkPixbuf.Pixbuf.new_from_stream_async(stream, null, (obj, res) => {
-            try {
-                const pb = GdkPixbuf.Pixbuf.new_from_stream_finish(res);
-                resolve(pb);
-            } catch (e) {
-                reject(e);
-            }
-        });
-    });
-}
-
-function savePixbufToFile(pixbuf, destFile) {
-    return new Promise((resolve, reject) => {
-        destFile.replace_async(null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, GLib.PRIORITY_DEFAULT, null, (obj, res) => {
-            try {
-                const outputStream = destFile.replace_finish(res);
-                pixbuf.save_to_streamv_async(
-                    outputStream,
-                    'jpeg',
-                    ['quality'],
-                    ['80'],
-                    null,
-                    (pbObj, pbRes) => {
-                        try {
-                            pixbuf.save_to_stream_finish(pbRes);
-                            outputStream.close_async(GLib.PRIORITY_DEFAULT, null, (streamObj, closeRes) => {
-                                try {
-                                    outputStream.close_finish(closeRes);
-                                } catch (ce) { }
-                                resolve();
-                            });
-                        } catch (e) {
-                            try {
-                                outputStream.close(null);
-                            } catch (ce) { }
-                            reject(e);
-                        }
-                    }
-                );
-            } catch (e) {
-                reject(e);
-            }
-        });
-    });
-}
-
-async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath) {
+function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFilePath) {
     try {
         const userName = GLib.get_user_name();
         const style = bgSettings.get_enum('picture-options');
         const isColor = (style === 0);
+        const isXml = uri && uri.toLowerCase().endsWith('.xml');
         let targetPath = `/var/tmp/wack-shared-wallpaper-${userName}.jpg`;
 
         let resolvedSlidePath = null;
-        if (uri && uri.toLowerCase().endsWith('.xml')) {
+        if (isXml) {
             resolvedSlidePath = targetFilePath;
         }
 
@@ -717,10 +588,10 @@ async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFi
         const metaFile = Gio.File.new_for_path(`/var/tmp/wack-shared-wallpaper-${userName}.json`);
         let metadataMatches = false;
 
-        if (await fileExists(metaFile)) {
+        if (metaFile.query_exists(null)) {
             try {
-                const contents = await loadFileContents(metaFile);
-                if (contents) {
+                const [loadSuccess, contents] = metaFile.load_contents(null);
+                if (loadSuccess) {
                     const existingMetadata = JSON.parse(new TextDecoder().decode(contents));
                     const currentPrimary = bgSettings.get_string('primary-color');
                     const currentSecondary = bgSettings.get_string('secondary-color');
@@ -733,7 +604,7 @@ async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFi
                         existingMetadata.secondary_color === currentSecondary &&
                         existingMetadata.shading_type === currentShading) {
 
-                        if (uri && uri.toLowerCase().endsWith('.xml')) {
+                        if (isXml) {
                             if (existingMetadata.resolved_slide_path === resolvedSlidePath)
                                 metadataMatches = true;
                         } else {
@@ -742,13 +613,13 @@ async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFi
 
                         if (metadataMatches && !isColor) {
                             const fileToCheck = Gio.File.new_for_path(targetPath);
-                            if (!(await fileExists(fileToCheck)))
+                            if (!fileToCheck.query_exists(null))
                                 metadataMatches = false;
                         }
                     }
                 }
             } catch (e) {
-                // Ignore
+                // Ignore metadata read errors
             }
         }
 
@@ -756,29 +627,16 @@ async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFi
 
         if (!metadataMatches && uri && uri.startsWith('file://') && !isColor) {
             let realSrcFile = null;
-            if (resolvedSlidePath) {
+            if (isXml && resolvedSlidePath) {
                 realSrcFile = Gio.File.new_for_path(resolvedSlidePath);
             } else {
                 realSrcFile = Gio.File.new_for_uri(uri);
             }
 
-            if (realSrcFile && (await fileExists(realSrcFile))) {
+            if (realSrcFile && realSrcFile.query_exists(null)) {
                 try {
-                    const readStream = await new Promise((resolve, reject) => {
-                        realSrcFile.read_async(GLib.PRIORITY_DEFAULT, null, (obj, res) => {
-                            try {
-                                resolve(realSrcFile.read_finish(res));
-                            } catch (e) {
-                                reject(e);
-                            }
-                        });
-                    });
-
-                    const pixbuf = await loadPixbufFromStream(readStream);
-                    try {
-                        readStream.close(null);
-                    } catch (ce) { }
-
+                    const srcPath = realSrcFile.get_path();
+                    const pixbuf = GdkPixbuf.Pixbuf.new_from_file(srcPath);
                     const w = pixbuf.get_width();
                     const h = pixbuf.get_height();
 
@@ -796,9 +654,10 @@ async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFi
                     }
 
                     const scaled = pixbuf.scale_simple(scaleW, scaleH, GdkPixbuf.InterpType.BILINEAR);
+                    scaled.savev(targetPath, 'jpeg', ['quality'], ['80']);
+
                     const destFile = Gio.File.new_for_path(targetPath);
-                    await savePixbufToFile(scaled, destFile);
-                    await setFilePermissions(destFile, 0o644);
+                    destFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
                     success = true;
                 } catch (err) {
                     try {
@@ -809,8 +668,8 @@ async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFi
                             srcExt = srcPath.substring(lastDot);
                         targetPath = `/var/tmp/wack-shared-wallpaper-${userName}${srcExt}`;
                         const destFile = Gio.File.new_for_path(targetPath);
-                        await copyFile(realSrcFile, destFile);
-                        await setFilePermissions(destFile, 0o644);
+                        realSrcFile.copy(destFile, Gio.FileCopyFlags.OVERWRITE, null, null);
+                        destFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
                         success = true;
                     } catch (copyErr) {
                         // Ignore
@@ -833,11 +692,16 @@ async function _saveSharedWallpaper(bgSettings, interfaceSettings, uri, targetFi
             clockFormat: interfaceSettings.get_string('clock-format'),
         };
 
-        const bytes = new TextEncoder().encode(JSON.stringify(metadata));
-        await replaceFileContents(metaFile, bytes);
-        await setFilePermissions(metaFile, 0o644);
+        metaFile.replace_contents(
+            JSON.stringify(metadata),
+            null,
+            false,
+            Gio.FileCreateFlags.REPLACE_DESTINATION,
+            null
+        );
+        metaFile.set_attribute_uint32('unix::mode', 0o644, Gio.FileQueryInfoFlags.NONE, null);
     } catch (e) {
-        // Ignore
+        logError(e, 'WACK Shell/ColorManager: Failed to save shared wallpaper');
     }
 }
 

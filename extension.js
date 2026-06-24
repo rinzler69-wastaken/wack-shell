@@ -1128,20 +1128,23 @@ export default class WackShellExtension extends Extension {
             actors.forEach(actor => {
                 const win = actor.metaWindow;
                 if (!win) return;
-                const rect = win.get_frame_rect();
-                const content = actor.paint_to_content(rect);
+                // Use buffer rect (not frame rect) so the snapshot includes
+                // the compositor-side window shadow. paint_to_content(null)
+                // captures the full GPU buffer without any clipping.
+                const bufferRect = win.get_buffer_rect();
+                const content = actor.paint_to_content(null);
                 const title = win.get_title?.() ?? '(no title)';
                 if (content) {
                     global.wack_window_snapshots.push({
                         content: content,
                         rect: {
-                            x: rect.x,
-                            y: rect.y,
-                            width: rect.width,
-                            height: rect.height
+                            x: bufferRect.x,
+                            y: bufferRect.y,
+                            width: bufferRect.width,
+                            height: bufferRect.height
                         }
                     });
-                    log(`[WACK Shell] cached "${title}" rect=${rect.x},${rect.y} ${rect.width}x${rect.height}`);
+                    log(`[WACK Shell] cached "${title}" bufferRect=${bufferRect.x},${bufferRect.y} ${bufferRect.width}x${bufferRect.height}`);
                 } else {
                     log(`[WACK Shell] paint_to_content returned null/falsy for "${title}" — SKIPPED`);
                 }
