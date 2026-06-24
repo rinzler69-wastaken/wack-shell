@@ -1,8 +1,8 @@
 {
   "name": "WACK Shell",
-  "description": "Brings the macOS-inspired panel experience to GNOME — logo menu, app menu, workspace widget, and dynamic panel color, living right where you'd expect them. Part of the WACK Project.",
+  "description": "A macOS-inspired panel suite for GNOME featuring live panel vibrancy, proximity-aware panel coloring, and — when paired with WACK Sonoma Lockscreen — a seamless Cupertino unlock animation powered by real window texture snapshots. Part of the WACK Project.",
   "uuid": "wack-shell@rinzler69-wastaken.github.com",
-    "session-modes": [
+  "session-modes": [
     "unlock-dialog",
     "user"
   ],
