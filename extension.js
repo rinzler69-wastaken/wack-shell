@@ -1178,9 +1178,15 @@ export default class WackShellExtension extends Extension {
             } else {
                 this._animateWindowsIn();
             }
-            // Clear snapshot cache upon entering the user session
-            log(`[WACK Shell] _syncSessionModeUI: hasWindows flipped true, clearing wack_window_snapshots (was ${global.wack_window_snapshots?.length ?? 0})`);
-            global.wack_window_snapshots = [];
+            if (Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode()) {
+                // Preserve snapshots during the synthetic hasWindows flip used by the
+                // paired lockscreen extension's Cupertino unlock crossfade.
+                log(`[WACK Shell] _syncSessionModeUI: preserving wack_window_snapshots during Cupertino unlock handoff (${global.wack_window_snapshots?.length ?? 0} cached)`);
+            } else {
+                // Clear snapshot cache upon entering the user session
+                log(`[WACK Shell] _syncSessionModeUI: hasWindows flipped true, clearing wack_window_snapshots (was ${global.wack_window_snapshots?.length ?? 0})`);
+                global.wack_window_snapshots = [];
+            }
         }
 
         this._lastHasWindows = hasWindows;
@@ -1268,7 +1274,8 @@ export default class WackShellExtension extends Extension {
                 if (!win) return false;
                 return !win.is_override_redirect() &&
                     win.located_on_workspace(workspace) &&
-                    win.get_window_type() !== Meta.WindowType.DESKTOP;
+                    win.get_window_type() !== Meta.WindowType.DESKTOP &&
+                    !win.is_hidden();
             });
 
             log(`[WACK Shell] _cacheWindowTextures: ${actors.length} candidate window actor(s) found`);
@@ -1502,6 +1509,11 @@ export default class WackShellExtension extends Extension {
 #panel.panel-proximity .app-menu-icon,
 #panel.panel-proximity .popup-menu-arrow {
     color: ${fgCss} !important;
+}
+
+#panel.panel-proximity .workspace-dot {
+    border-radius: 999px;
+    background-color: ${fgCss} !important;
 }
 `;
         const bytes = new TextEncoder().encode(cssString);
@@ -1959,6 +1971,7 @@ export default class WackShellExtension extends Extension {
         const style = this._settings.get_int('vibrancy-style');
         const borrowVenturaLight = this._getBorrowVenturaLight();
         const useVenturaLight = (style === 2 || borrowVenturaLight) && !isDark;
+
         const effectiveStyle = useVenturaLight ? 2 : 1;
 
         // Resolve active blur mode in Auto (3)
