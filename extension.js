@@ -1009,6 +1009,7 @@ export default class WackShellExtension extends Extension {
         this._initProximity();
         this._initWallpaperColorTracker();
         this._initVibrancy();
+        this._setupWindowCache();
     }
 
     disable() {
@@ -1087,6 +1088,7 @@ export default class WackShellExtension extends Extension {
         if (Main.sessionMode.currentMode !== 'unlock-dialog') {
             Main.panel.statusArea['activities']?.container.show();
         }
+        this._destroyWindowCache();
     }
 
     _syncLogoMenu() {
@@ -1166,7 +1168,14 @@ export default class WackShellExtension extends Extension {
 
         // Trigger window entrance animation when transitioning from locked to unlocked
         if (hasWindows && this._lastHasWindows === false) {
-            this._animateWindowsIn();
+            if (this._isLockscreenCupertinoMode()) {
+                this._resetWindowsOpacity();
+            } else {
+                this._animateWindowsIn();
+            }
+            // Clear snapshot cache upon entering the user session
+            log(`[WACK Shell] _syncSessionModeUI: hasWindows flipped true, clearing wack_window_snapshots (was ${global.wack_window_snapshots?.length ?? 0})`);
+            global.wack_window_snapshots = [];
         }
 
         this._lastHasWindows = hasWindows;
@@ -1228,6 +1237,103 @@ export default class WackShellExtension extends Extension {
                 });
             }
         });
+    }
+
+    _setupWindowCache() {
+        global.wack_window_snapshots = [];
+
+        // Intercept Main.screenShield.activate to capture window textures upon screen lock
+        const shield = Main.screenShield;
+        if (shield) {
+            this._origShieldActivate = shield.activate.bind(shield);
+            shield.activate = (animate) => {
+                log('[WACK Shell] shield.activate intercepted, caching window textures');
+                this._cacheWindowTextures();
+                return this._origShieldActivate(animate);
+            };
+        }
+    }
+
+    _cacheWindowTextures() {
+        global.wack_window_snapshots = [];
+        try {
+            const workspace = global.workspace_manager.get_active_workspace();
+            const actors = global.get_window_actors().filter(actor => {
+                const win = actor.metaWindow;
+                if (!win) return false;
+                return !win.is_override_redirect() &&
+                    win.located_on_workspace(workspace) &&
+                    win.get_window_type() !== Meta.WindowType.DESKTOP;
+            });
+
+            log(`[WACK Shell] _cacheWindowTextures: ${actors.length} candidate window actor(s) found`);
+
+            actors.forEach(actor => {
+                const win = actor.metaWindow;
+                if (!win) return;
+                // Use buffer rect (not frame rect) so the snapshot includes
+                // the compositor-side window shadow. paint_to_content(null)
+                // captures the full GPU buffer without any clipping.
+                const bufferRect = win.get_buffer_rect();
+                const content = actor.paint_to_content(null);
+                const title = win.get_title?.() ?? '(no title)';
+                if (content) {
+                    global.wack_window_snapshots.push({
+                        content: content,
+                        rect: {
+                            x: bufferRect.x,
+                            y: bufferRect.y,
+                            width: bufferRect.width,
+                            height: bufferRect.height
+                        }
+                    });
+                    log(`[WACK Shell] cached "${title}" bufferRect=${bufferRect.x},${bufferRect.y} ${bufferRect.width}x${bufferRect.height}`);
+                } else {
+                    log(`[WACK Shell] paint_to_content returned null/falsy for "${title}" — SKIPPED`);
+                }
+            });
+
+            log(`[WACK Shell] _cacheWindowTextures: total cached = ${global.wack_window_snapshots.length}`);
+        } catch (err) {
+            logError(err, 'WACK Shell: Failed to cache window textures');
+        }
+    }
+
+    _destroyWindowCache() {
+        if (Main.screenShield && this._origShieldActivate) {
+            Main.screenShield.activate = this._origShieldActivate;
+            this._origShieldActivate = null;
+        }
+        global.wack_window_snapshots = [];
+    }
+
+    _isLockscreenCupertinoMode() {
+        try {
+            const settings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.wack-lockscreen-clock' });
+            return settings.get_string('lockscreen-mode') === 'cupertino';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    _resetWindowsOpacity() {
+        try {
+            const workspace = global.workspace_manager.get_active_workspace();
+            const windows = workspace.list_windows().filter(metaWindow => {
+                return !metaWindow.is_hidden() &&
+                    metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
+                    !metaWindow.is_attached_dialog();
+            });
+            const windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
+            windowActors.forEach(actor => {
+                actor.remove_all_transitions();
+                actor.opacity = 255;
+                actor.scale_x = 1.0;
+                actor.scale_y = 1.0;
+            });
+        } catch (err) {
+            logError(err, 'WACK Shell: Failed to reset windows opacity');
+        }
     }
 
     _initProximity() {
