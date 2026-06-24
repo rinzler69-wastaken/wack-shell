@@ -2,9 +2,9 @@
   "name": "WACK Shell",
   "description": "Brings the macOS-inspired panel experience to GNOME — logo menu, app menu, workspace widget, and dynamic panel color, living right where you'd expect them. Part of the WACK Project.",
   "uuid": "wack-shell@rinzler69-wastaken.github.com",
-    "session-modes": [
-    "unlock-dialog",
-    "user"
+  "session-modes": [
+    "user",
+    "unlock-dialog"
   ],
   "shell-version": [
     "46",

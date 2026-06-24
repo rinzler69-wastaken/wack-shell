@@ -1009,6 +1009,7 @@ export default class WackShellExtension extends Extension {
         this._initProximity();
         this._initWallpaperColorTracker();
         this._initVibrancy();
+        this._setupWindowCache();
     }
 
     disable() {
@@ -1092,6 +1093,101 @@ export default class WackShellExtension extends Extension {
         if (Main.sessionMode.currentMode !== 'unlock-dialog') {
             Main.panel.statusArea['activities']?.container.show();
         }
+        this._destroyWindowCache();
+    }
+
+    _setupWindowCache() {
+        global.wack_window_snapshots = [];
+
+        // Intercept Main.screenShield.activate to capture window textures upon screen lock
+        const shield = Main.screenShield;
+        if (shield) {
+            this._origShieldActivate = shield.activate.bind(shield);
+            shield.activate = (animate) => {
+                log('[WACK Shell] shield.activate intercepted, caching window textures');
+                this._cacheWindowTextures();
+                return this._origShieldActivate(animate);
+            };
+        }
+    }
+
+    _cacheWindowTextures() {
+        global.wack_window_snapshots = [];
+        try {
+            const workspace = global.workspace_manager.get_active_workspace();
+            const actors = global.get_window_actors().filter(actor => {
+                const win = actor.metaWindow;
+                if (!win) return false;
+                return !win.is_override_redirect() &&
+                    win.located_on_workspace(workspace) &&
+                    win.get_window_type() !== Meta.WindowType.DESKTOP;
+            });
+
+            log(`[WACK Shell] _cacheWindowTextures: ${actors.length} candidate window actor(s) found`);
+
+            actors.forEach(actor => {
+                const win = actor.metaWindow;
+                if (!win) return;
+                const rect = win.get_frame_rect();
+                const content = actor.paint_to_content(rect);
+                const title = win.get_title?.() ?? '(no title)';
+                if (content) {
+                    global.wack_window_snapshots.push({
+                        content: content,
+                        rect: {
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: rect.height
+                        }
+                    });
+                    log(`[WACK Shell] cached "${title}" rect=${rect.x},${rect.y} ${rect.width}x${rect.height}`);
+                } else {
+                    log(`[WACK Shell] paint_to_content returned null/falsy for "${title}" — SKIPPED`);
+                }
+            });
+
+            log(`[WACK Shell] _cacheWindowTextures: total cached = ${global.wack_window_snapshots.length}`);
+        } catch (err) {
+            logError(err, 'WACK Shell: Failed to cache window textures');
+        }
+    }
+
+    _destroyWindowCache() {
+        if (Main.screenShield && this._origShieldActivate) {
+            Main.screenShield.activate = this._origShieldActivate;
+            this._origShieldActivate = null;
+        }
+        global.wack_window_snapshots = [];
+    }
+
+    _isLockscreenCupertinoMode() {
+        try {
+            const settings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.wack-lockscreen-clock' });
+            return settings.get_string('lockscreen-mode') === 'cupertino';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    _resetWindowsOpacity() {
+        try {
+            const workspace = global.workspace_manager.get_active_workspace();
+            const windows = workspace.list_windows().filter(metaWindow => {
+                return !metaWindow.is_hidden() &&
+                    metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
+                    !metaWindow.is_attached_dialog();
+            });
+            const windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
+            windowActors.forEach(actor => {
+                actor.remove_all_transitions();
+                actor.opacity = 255;
+                actor.scale_x = 1.0;
+                actor.scale_y = 1.0;
+            });
+        } catch (err) {
+            logError(err, 'WACK Shell: Failed to reset windows opacity');
+        }
     }
 
     _syncLogoMenu() {
@@ -1171,7 +1267,14 @@ export default class WackShellExtension extends Extension {
 
         // Trigger window entrance animation when transitioning from locked to unlocked
         if (hasWindows && this._lastHasWindows === false) {
-            this._animateWindowsIn();
+            if (this._isLockscreenCupertinoMode()) {
+                this._resetWindowsOpacity();
+            } else {
+                this._animateWindowsIn();
+            }
+            // Clear snapshot cache upon entering the user session
+            log(`[WACK Shell] _syncSessionModeUI: hasWindows flipped true, clearing wack_window_snapshots (was ${global.wack_window_snapshots?.length ?? 0})`);
+            global.wack_window_snapshots = [];
         }
 
         this._lastHasWindows = hasWindows;
@@ -1183,10 +1286,10 @@ export default class WackShellExtension extends Extension {
             const workspace = global.workspace_manager.get_active_workspace();
             const windows = workspace.list_windows().filter(metaWindow => {
                 return !metaWindow.is_hidden() &&
-                       metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
-                       !metaWindow.is_attached_dialog() &&
-                       !metaWindow.maximized_horizontally &&
-                       !metaWindow.maximized_vertically;
+                    metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
+                    !metaWindow.is_attached_dialog() &&
+                    !metaWindow.maximized_horizontally &&
+                    !metaWindow.maximized_vertically;
             });
             windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
         } catch (err) {
@@ -1198,7 +1301,7 @@ export default class WackShellExtension extends Extension {
             actor.remove_all_transitions();
 
             const isDialog = actor.meta_window.get_window_type() === Meta.WindowType.DIALOG ||
-                             actor.meta_window.get_window_type() === Meta.WindowType.MODAL_DIALOG;
+                actor.meta_window.get_window_type() === Meta.WindowType.MODAL_DIALOG;
 
             if (isDialog) {
                 actor.set_pivot_point(0.5, 0.5);
@@ -1304,11 +1407,13 @@ export default class WackShellExtension extends Extension {
         ];
 
         if (!meta_window_actor.meta_window) {
-            signals.push({ object: meta_window_actor, id: meta_window_actor.connect('notify::meta-window', () => {
-                if (meta_window_actor.meta_window) {
-                    signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._queueUpdatePanelVisibility()) });
-                }
-            }) });
+            signals.push({
+                object: meta_window_actor, id: meta_window_actor.connect('notify::meta-window', () => {
+                    if (meta_window_actor.meta_window) {
+                        signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._queueUpdatePanelVisibility()) });
+                    }
+                })
+            });
         } else {
             signals.push({ object: meta_window_actor.meta_window, id: meta_window_actor.meta_window.connect('notify::minimized', () => this._queueUpdatePanelVisibility()) });
         }
@@ -1623,9 +1728,9 @@ export default class WackShellExtension extends Extension {
 
         // React to our own settings changes
         this._settings.connectObject(
-            'changed::enable-vibrancy',    () => this._syncVibrancy(),
+            'changed::enable-vibrancy', () => this._syncVibrancy(),
             'changed::vibrancy-blur-mode', () => this._syncVibrancy(),
-            'changed::vibrancy-style',     () => this._syncVibrancy(),
+            'changed::vibrancy-style', () => this._syncVibrancy(),
             this
         );
 
@@ -1655,7 +1760,7 @@ export default class WackShellExtension extends Extension {
 
     _initBmsSettings() {
         if (this._vibrancyBmsSig && this._bmsSettings) {
-            try { this._bmsSettings.disconnect(this._vibrancyBmsSig); } catch {}
+            try { this._bmsSettings.disconnect(this._vibrancyBmsSig); } catch { }
             this._vibrancyBmsSig = null;
             this._bmsSettings = null;
         }
@@ -1825,7 +1930,7 @@ export default class WackShellExtension extends Extension {
         // Lenient if center has a contrasting hue stop relative to left/right,
         // OR if we have a wide, distinct three-color transition stop (Ventura Dark)
         return (diffLC > 35 && diffCR > 35 && linearityError > 30) ||
-               (diffLC > 18 && diffCR > 18 && diffLR > 45);
+            (diffLC > 18 && diffCR > 18 && diffLR > 45);
     }
 
     /**
@@ -1876,9 +1981,9 @@ export default class WackShellExtension extends Extension {
 
     /** Called when color scheme or style changes — re-applies panel CSS. */
     _applyVibrancyStyle() {
-        const enabled  = this._settings.get_boolean('enable-vibrancy');
+        const enabled = this._settings.get_boolean('enable-vibrancy');
         const blurMode = this._settings.get_int('vibrancy-blur-mode');
-        const style    = this._settings.get_int('vibrancy-style');
+        const style = this._settings.get_int('vibrancy-style');
         const bmsConflict = this._bmsHasPanelBlur();
         const vibrancyClasses = ['panel-ventura-light', 'panel-bigsur'];
 
@@ -2028,12 +2133,12 @@ export default class WackShellExtension extends Extension {
         if (this._extStateChangedId) {
             try {
                 Main.extensionManager.disconnect(this._extStateChangedId);
-            } catch {}
+            } catch { }
             this._extStateChangedId = 0;
         }
 
         if (this._vibrancyStyleActive) {
-            try { Main.panel.set_style(null); } catch {}
+            try { Main.panel.set_style(null); } catch { }
             this._vibrancyStyleActive = false;
         }
     }
