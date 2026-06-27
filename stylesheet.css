@@ -38,6 +38,11 @@
   color: rgb(20, 20, 20) !important;
 }
 
+.workspace-dot {
+  border-radius: 999px;
+  background-color: #ffffff !important;
+}
+
 #panel.light-contrast .workspace-dot {
   border-radius: 999px;
   background-color: #222226 !important;

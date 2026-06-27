@@ -1010,6 +1010,12 @@ export default class WackShellExtension extends Extension {
         this._initWallpaperColorTracker();
         this._initVibrancy();
         this._setupWindowCache();
+
+        try {
+            this._lockscreenSettings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.wack-lockscreen-clock' });
+        } catch {
+            this._lockscreenSettings = null;
+        }
     }
 
     disable() {
@@ -1094,6 +1100,7 @@ export default class WackShellExtension extends Extension {
             Main.panel.statusArea['activities']?.container.show();
         }
         this._destroyWindowCache();
+        this._lockscreenSettings = null;
     }
 
     _syncLogoMenu() {
@@ -1320,12 +1327,7 @@ export default class WackShellExtension extends Extension {
     }
 
     _isLockscreenCupertinoMode() {
-        try {
-            const settings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.wack-lockscreen-clock' });
-            return settings.get_string('lockscreen-mode') === 'cupertino';
-        } catch (e) {
-            return false;
-        }
+        return this._lockscreenSettings?.get_string('lockscreen-mode') === 'cupertino';
     }
 
     _resetWindowsOpacity() {
@@ -1637,9 +1639,6 @@ export default class WackShellExtension extends Extension {
         }
 
         Main.panel.set_style(null); // Clear wallpaper gradient style so proximity takes precedence
-        if (this._currentColors) {
-            this._updateContrast(this._currentColors);
-        }
     }
 
     _clearPanelStyle() {
@@ -1778,7 +1777,7 @@ export default class WackShellExtension extends Extension {
 
     _initBmsSettings() {
         if (this._vibrancyBmsSig && this._bmsSettings) {
-            try { this._bmsSettings.disconnect(this._vibrancyBmsSig); } catch { }
+            this._bmsSettings.disconnect(this._vibrancyBmsSig);
             this._vibrancyBmsSig = null;
             this._bmsSettings = null;
         }
@@ -2150,14 +2149,12 @@ export default class WackShellExtension extends Extension {
         }
 
         if (this._extStateChangedId) {
-            try {
-                Main.extensionManager.disconnect(this._extStateChangedId);
-            } catch { }
+            Main.extensionManager.disconnect(this._extStateChangedId);
             this._extStateChangedId = 0;
         }
 
         if (this._vibrancyStyleActive) {
-            try { Main.panel.set_style(null); } catch { }
+            Main.panel.set_style(null);
             this._vibrancyStyleActive = false;
         }
     }

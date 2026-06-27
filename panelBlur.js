@@ -212,15 +212,13 @@ export class PanelBlur {
             GLib.source_remove(this._sessionVisibilityTimeoutId);
             this._sessionVisibilityTimeoutId = 0;
         }
-        for (const [obj, id] of this._sigs) {
-            try { obj.disconnect(id); } catch { /* actor may be gone */ }
-        }
+        for (const [obj, id] of this._sigs)
+            obj.disconnect(id);
         this._sigs = [];
 
         if (this._bindings) {
-            for (const binding of this._bindings) {
-                try { binding.unbind(); } catch { }
-            }
+            for (const binding of this._bindings)
+                binding.unbind();
             this._bindings = [];
         }
 
