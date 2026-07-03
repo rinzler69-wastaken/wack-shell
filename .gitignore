@@ -1,0 +1,9 @@
+venv
+.venv
+stylesheet-custom.css
+AGENT.md
+CLAUDE.md
+GEMINI.md
+schemas/gschemas.compiled
+locale/
+*.zip

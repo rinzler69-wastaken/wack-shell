@@ -71,3 +71,79 @@ export const ColouredDistroIcons = [
     { PATH: '/Resources/centos-logo.svg' },          // CentOS (index 32)
     { PATH: '/Resources/cachyos-logo.svg' },         // CachyOS (index 33)
 ];
+
+export function clamp(val, min, max) {
+    return Math.max(min, Math.min(val, max));
+}
+
+export function parseColorStringToRgb(str) {
+    if (!str) return { r: 0, g: 0, b: 0 };
+    const cleanedStr = str.trim();
+    if (cleanedStr.startsWith('#')) {
+        const cleaned = cleanedStr.replace('#', '');
+        if (cleaned.length === 3) {
+            return {
+                r: parseInt(cleaned[0] + cleaned[0], 16),
+                g: parseInt(cleaned[1] + cleaned[1], 16),
+                b: parseInt(cleaned[2] + cleaned[2], 16)
+            };
+        } else if (cleaned.length === 6) {
+            return {
+                r: parseInt(cleaned.substring(0, 2), 16),
+                g: parseInt(cleaned.substring(2, 4), 16),
+                b: parseInt(cleaned.substring(4, 6), 16)
+            };
+        }
+    }
+    const match = cleanedStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        return {
+            r: parseInt(match[1], 10),
+            g: parseInt(match[2], 10),
+            b: parseInt(match[3], 10)
+        };
+    }
+    return { r: 0, g: 0, b: 0 };
+}
+
+export function getLuminance(r, g, b) {
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+}
+
+export const DISTRO_LOGOS = [
+    "Default",
+    "Apple (Wackintosh)",
+    "Fedora",
+    "Debian",
+    "Manjaro",
+    "Pop!_OS",
+    "Ubuntu",
+    "Arch Linux",
+    "openSUSE",
+    "Raspbian",
+    "Kali Linux",
+    "PureOS",
+    "Solus",
+    "Budgie",
+    "Gentoo",
+    "MX Linux",
+    "Red Hat",
+    "Voyager",
+    "Garuda",
+    "FreeBSD",
+    "Tux (Linux)",
+    "Rocky Linux",
+    "EndeavourOS",
+    "AlmaLinux",
+    "NixOS",
+    "ShastraOS",
+    "Asahi Linux",
+    "Zorin OS",
+    "Void Linux",
+    "Nobara",
+    "Steam Deck",
+    "Ublue",
+    "CentOS",
+    "CachyOS"
+];
+

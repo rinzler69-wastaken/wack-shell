@@ -2,6 +2,7 @@ import Gio from 'gi://Gio';
 import GdkPixbuf from 'gi://GdkPixbuf';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import { getLuminance, parseColorStringToRgb } from './constants.js';
 
 const userName = GLib.get_user_name();
 const CACHE_FILE = `/var/tmp/wack-shell-gradient-cache-${userName}.json`;
@@ -72,111 +73,6 @@ function saveCache() {
     }
 }
 
-function parseHexColor(hex) {
-    if (!hex)
-        return { r: 0, g: 0, b: 0 };
-    const cleaned = hex.replace('#', '').replace(/'/g, '');
-    if (cleaned.length === 3) {
-        return {
-            r: parseInt(cleaned[0] + cleaned[0], 16),
-            g: parseInt(cleaned[1] + cleaned[1], 16),
-            b: parseInt(cleaned[2] + cleaned[2], 16),
-        };
-    } else if (cleaned.length === 6) {
-        return {
-            r: parseInt(cleaned.substring(0, 2), 16),
-            g: parseInt(cleaned.substring(2, 4), 16),
-            b: parseInt(cleaned.substring(4, 6), 16),
-        };
-    }
-    return { r: 0, g: 0, b: 0 };
-}
-
-function getLuminance(r, g, b) {
-    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
-}
-
-function resolveSlideshowXml(xmlPath) {
-    return new Promise((resolve) => {
-        const file = Gio.File.new_for_path(xmlPath);
-        file.load_contents_async(null, (obj, res) => {
-            try {
-                const [success, content] = file.load_contents_finish(res);
-                if (!success || !content) {
-                    resolve(null);
-                    return;
-                }
-
-                const xmlStr = new TextDecoder('utf-8').decode(content);
-
-                // Parse starttime
-                const starttimeMatch = xmlStr.match(/<starttime>([\s\S]*?)<\/starttime>/);
-                let startYear = 2020, startMonth = 0, startDay = 1, startHour = 0, startMin = 0, startSec = 0;
-                if (starttimeMatch) {
-                    const inner = starttimeMatch[1];
-                    const yearM = inner.match(/<year>(\d+)<\/year>/);
-                    const monthM = inner.match(/<month>(\d+)<\/month>/);
-                    const dayM = inner.match(/<day>(\d+)<\/day>/);
-                    const hourM = inner.match(/<hour>(\d+)<\/hour>/);
-                    const minM = inner.match(/<minute>(\d+)<\/minute>/);
-                    const secM = inner.match(/<second>(\d+)<\/second>/);
-                    if (yearM) startYear = parseInt(yearM[1], 10);
-                    if (monthM) startMonth = parseInt(monthM[1], 10) - 1;
-                    if (dayM) startDay = parseInt(dayM[1], 10);
-                    if (hourM) startHour = parseInt(hourM[1], 10);
-                    if (minM) startMin = parseInt(minM[1], 10);
-                    if (secM) startSec = parseInt(secM[1], 10);
-                }
-                const startDate = new Date(startYear, startMonth, startDay, startHour, startMin, startSec);
-
-                // Parse static and transition blocks in order
-                const blockRegex = /<(static|transition)[^>]*>([\s\S]*?)<\/\1>/g;
-                const blocks = [];
-                let totalDuration = 0;
-                let match;
-                while ((match = blockRegex.exec(xmlStr)) !== null) {
-                    const type = match[1];
-                    const inner = match[2];
-                    const durM = inner.match(/<duration>([\d.]+)<\/duration>/);
-                    const duration = durM ? parseFloat(durM[1]) : 0;
-
-                    let fileStr = '';
-                    if (type === 'static') {
-                        const fileM = inner.match(/<file>([\s\S]*?)<\/file>/);
-                        fileStr = fileM ? fileM[1].trim() : '';
-                    } else {
-                        const fromM = inner.match(/<from>([\s\S]*?)<\/from>/);
-                        fileStr = fromM ? fromM[1].trim() : '';
-                    }
-
-                    blocks.push({ type, duration, file: fileStr });
-                    totalDuration += duration;
-                }
-
-                if (totalDuration > 0 && blocks.length > 0) {
-                    const now = new Date();
-                    let diffSeconds = (now.getTime() - startDate.getTime()) / 1000.0;
-                    let offset = diffSeconds % totalDuration;
-                    if (offset < 0)
-                        offset += totalDuration;
-
-                    for (const block of blocks) {
-                        if (offset <= block.duration) {
-                            resolve(block.file);
-                            return;
-                        }
-                        offset -= block.duration;
-                    }
-                    resolve(blocks[0].file);
-                    return;
-                }
-            } catch (e) {
-                logError(e, 'WACK Shell/ColorManager: Failed to resolve XML slideshow');
-            }
-            resolve(null);
-        });
-    });
-}
 
 function sampleRegion(pixels, channels, rowstride, xStart, xEnd, yStart, yEnd) {
     let rSum = 0, gSum = 0, bSum = 0, count = 0;
@@ -242,16 +138,7 @@ export async function getPanelColors() {
     let targetFilePath = null;
 
     if (uri && uri.startsWith('file://')) {
-        const filePath = Gio.File.new_for_uri(uri).get_path();
-        if (filePath && filePath.endsWith('.xml')) {
-            const resolvedPath = await resolveSlideshowXml(filePath);
-            if (resolvedPath) {
-                targetFilePath = resolvedPath;
-                targetUri = GLib.filename_to_uri(resolvedPath, null);
-            }
-        } else {
-            targetFilePath = filePath;
-        }
+        targetFilePath = Gio.File.new_for_uri(uri).get_path();
     }
 
     await initCache();
@@ -269,8 +156,8 @@ export async function getPanelColors() {
     let dynamicStops = [];
 
     if (isColor) {
-        const c1 = parseHexColor(primaryColor);
-        const c2 = parseHexColor(secondaryColor);
+        const c1 = parseColorStringToRgb(primaryColor);
+        const c2 = parseColorStringToRgb(secondaryColor);
         if (shadingType === 0) { // Solid
             left = right = center = c1;
         } else if (shadingType === 1) { // Vertical

@@ -4,47 +4,8 @@ import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gdk from 'gi://Gdk';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import { clamp, DISTRO_LOGOS } from './constants.js';
 
-const DISTRO_LOGOS = [
-    "Default",
-    "Apple (Wackintosh)",
-    "Fedora",
-    "Debian",
-    "Manjaro",
-    "Pop!_OS",
-    "Ubuntu",
-    "Arch Linux",
-    "openSUSE",
-    "Raspbian",
-    "Kali Linux",
-    "PureOS",
-    "Solus",
-    "Budgie",
-    "Gentoo",
-    "MX Linux",
-    "Red Hat",
-    "Voyager",
-    "Garuda",
-    "FreeBSD",
-    "Tux (Linux)",
-    "Rocky Linux",
-    "EndeavourOS",
-    "AlmaLinux",
-    "NixOS",
-    "ShastraOS",
-    "Asahi Linux",
-    "Zorin OS",
-    "Void Linux",
-    "Nobara",
-    "Steam Deck",
-    "Ublue",
-    "CentOS",
-    "CachyOS"
-];
-
-function clamp(val, min, max) {
-    return Math.max(min, Math.min(val, max));
-}
 
 export default class WackShellPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -238,7 +199,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
         // -- PAGE 2: PANEL CONFIGURATION --------------------------------------
         // =====================================================================
         const generalPage = new Adw.PreferencesPage({
-            title: 'Panel',
+            title: 'Desktop',
             icon_name: 'preferences-system-symbolic',
         });
 
@@ -418,7 +379,20 @@ export default class WackShellPreferences extends ExtensionPreferences {
 
         generalPage.add(actionsGroup);
 
+        // Group 2.2.5: Overview
+        const overviewGroup = new Adw.PreferencesGroup({
+            title: 'Overview',
+        });
 
+        overviewGroup.add(this._buildSwitchRow(
+            settings,
+            settingsSignalIds,
+            'disable-workspaces-in-app-grid',
+            'Disable Workspace View in App Grid',
+            'Hide workspaces thumbnails/boxes in the application grid view'
+        ));
+
+        generalPage.add(overviewGroup);
 
         // Group 2.2.6: Vibrancy (panel blur + macOS-style transparency)
         const vibrancyGroup = new Adw.PreferencesGroup({

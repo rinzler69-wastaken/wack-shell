@@ -192,6 +192,18 @@
       <summary>Vibrancy Panel Style</summary>
       <description>0 = Off, 1 = On (Big Sur adaptive), 2 = Always Light Panel in Light Mode. Requires vibrancy-blur-mode to be active.</description>
     </key>
-    
+
+    <key type="b" name="workspaces-in-app-grid">
+      <default>true</default>
+      <summary>Workspaces in App Grid</summary>
+      <description>Show workspaces thumbnails/boxes in the application grid view.</description>
+    </key>
+
+    <key type="b" name="disable-workspaces-in-app-grid">
+      <default>false</default>
+      <summary>Disable Workspace View in App Grid</summary>
+      <description>Hide workspaces thumbnails/boxes in the application grid view.</description>
+    </key>
+
   </schema>
 </schemalist>
