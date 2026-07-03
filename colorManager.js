@@ -73,6 +73,88 @@ function saveCache() {
     }
 }
 
+function resolveSlideshowXml(xmlPath) {
+    return new Promise((resolve) => {
+        const file = Gio.File.new_for_path(xmlPath);
+        file.load_contents_async(null, (obj, res) => {
+            try {
+                const [success, content] = file.load_contents_finish(res);
+                if (!success || !content) {
+                    resolve(null);
+                    return;
+                }
+
+                const xmlStr = new TextDecoder('utf-8').decode(content);
+
+                // Parse starttime
+                const starttimeMatch = xmlStr.match(/<starttime>([\s\S]*?)<\/starttime>/);
+                let startYear = 2020, startMonth = 0, startDay = 1, startHour = 0, startMin = 0, startSec = 0;
+                if (starttimeMatch) {
+                    const inner = starttimeMatch[1];
+                    const yearM = inner.match(/<year>(\d+)<\/year>/);
+                    const monthM = inner.match(/<month>(\d+)<\/month>/);
+                    const dayM = inner.match(/<day>(\d+)<\/day>/);
+                    const hourM = inner.match(/<hour>(\d+)<\/hour>/);
+                    const minM = inner.match(/<minute>(\d+)<\/minute>/);
+                    const secM = inner.match(/<second>(\d+)<\/second>/);
+                    if (yearM) startYear = parseInt(yearM[1], 10);
+                    if (monthM) startMonth = parseInt(monthM[1], 10) - 1;
+                    if (dayM) startDay = parseInt(dayM[1], 10);
+                    if (hourM) startHour = parseInt(hourM[1], 10);
+                    if (minM) startMin = parseInt(minM[1], 10);
+                    if (secM) startSec = parseInt(secM[1], 10);
+                }
+                const startDate = new Date(startYear, startMonth, startDay, startHour, startMin, startSec);
+
+                // Parse static and transition blocks in order
+                const blockRegex = /<(static|transition)[^>]*>([\s\S]*?)<\/\1>/g;
+                const blocks = [];
+                let totalDuration = 0;
+                let match;
+                while ((match = blockRegex.exec(xmlStr)) !== null) {
+                    const type = match[1];
+                    const inner = match[2];
+                    const durM = inner.match(/<duration>([\d.]+)<\/duration>/);
+                    const duration = durM ? parseFloat(durM[1]) : 0;
+
+                    let fileStr = '';
+                    if (type === 'static') {
+                        const fileM = inner.match(/<file>([\s\S]*?)<\/file>/);
+                        fileStr = fileM ? fileM[1].trim() : '';
+                    } else {
+                        const fromM = inner.match(/<from>([\s\S]*?)<\/from>/);
+                        fileStr = fromM ? fromM[1].trim() : '';
+                    }
+
+                    blocks.push({ type, duration, file: fileStr });
+                    totalDuration += duration;
+                }
+
+                if (totalDuration > 0 && blocks.length > 0) {
+                    const now = new Date();
+                    let diffSeconds = (now.getTime() - startDate.getTime()) / 1000.0;
+                    let offset = diffSeconds % totalDuration;
+                    if (offset < 0)
+                        offset += totalDuration;
+
+                    for (const block of blocks) {
+                        if (offset <= block.duration) {
+                            resolve(block.file);
+                            return;
+                        }
+                        offset -= block.duration;
+                    }
+                    resolve(blocks[0].file);
+                    return;
+                }
+            } catch (e) {
+                logError(e, 'WACK Shell/ColorManager: Failed to resolve XML slideshow');
+            }
+            resolve(null);
+        });
+    });
+}
+
 
 function sampleRegion(pixels, channels, rowstride, xStart, xEnd, yStart, yEnd) {
     let rSum = 0, gSum = 0, bSum = 0, count = 0;
@@ -138,7 +220,16 @@ export async function getPanelColors() {
     let targetFilePath = null;
 
     if (uri && uri.startsWith('file://')) {
-        targetFilePath = Gio.File.new_for_uri(uri).get_path();
+        const filePath = Gio.File.new_for_uri(uri).get_path();
+        if (filePath && filePath.endsWith('.xml')) {
+            const resolvedPath = await resolveSlideshowXml(filePath);
+            if (resolvedPath) {
+                targetFilePath = resolvedPath;
+                targetUri = GLib.filename_to_uri(resolvedPath, null);
+            }
+        } else {
+            targetFilePath = filePath;
+        }
     }
 
     await initCache();
