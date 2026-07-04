@@ -147,3 +147,11 @@ export const DISTRO_LOGOS = [
     "CachyOS"
 ];
 
+// ─── Tunable: workspace thumbnail height in App Grid state ────────────────────
+// GNOME's built-in value is 0.15 (15% of the overview height).
+// Lower values give the app grid more vertical room when workspace view is ON.
+// When 'Disable Workspace View in App Grid' is ON the workspace is hidden via
+// opacity anyway, but this ratio still governs the hidden reserved area.
+// Accepted range: 0.001 – 0.15. Change and reload to fine-tune.
+export const APP_GRID_WORKSPACE_RATIO = 0.001;
+// ─────────────────────────────────────────────────────────────────────────────

@@ -5,7 +5,6 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as Util from 'resource:///org/gnome/shell/misc/util.js';
 import * as OverviewControls from 'resource:///org/gnome/shell/ui/overviewControls.js';
 
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -16,6 +15,7 @@ import {
     WackWorkspaceButton
 } from './panelComponents.js';
 import VibrancyManager from './vibrancyManager.js';
+import { APP_GRID_WORKSPACE_RATIO } from './constants.js';
 
 export default class WackShellExtension extends Extension {
     enable() {
@@ -220,21 +220,15 @@ export default class WackShellExtension extends Extension {
     }
 
     _animateWindowsIn() {
-        let windowActors = [];
-        try {
-            const workspace = global.workspace_manager.get_active_workspace();
-            const windows = workspace.list_windows().filter(metaWindow => {
-                return !metaWindow.is_hidden() &&
-                    metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
-                    !metaWindow.is_attached_dialog() &&
-                    !metaWindow.maximized_horizontally &&
-                    !metaWindow.maximized_vertically;
-            });
-            windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
-        } catch (err) {
-            logError(err, 'WACK Shell: Failed to find windows for animation');
-            return;
-        }
+        const workspace = global.workspace_manager.get_active_workspace();
+        const windows = workspace.list_windows().filter(metaWindow => {
+            return !metaWindow.is_hidden() &&
+                metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
+                !metaWindow.is_attached_dialog() &&
+                !metaWindow.maximized_horizontally &&
+                !metaWindow.maximized_vertically;
+        });
+        const windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
 
         windowActors.forEach(actor => {
             actor.remove_all_transitions();
@@ -293,45 +287,41 @@ export default class WackShellExtension extends Extension {
 
     _cacheWindowTextures() {
         global.wack_window_snapshots = [];
-        try {
-            const workspace = global.workspace_manager.get_active_workspace();
-            const actors = global.get_window_actors().filter(actor => {
-                const win = actor.metaWindow;
-                if (!win) return false;
-                return !win.is_override_redirect() &&
-                    win.located_on_workspace(workspace) &&
-                    win.get_window_type() !== Meta.WindowType.DESKTOP &&
-                    !win.is_hidden();
-            });
+        const workspace = global.workspace_manager.get_active_workspace();
+        const actors = global.get_window_actors().filter(actor => {
+            const win = actor.metaWindow;
+            if (!win) return false;
+            return !win.is_override_redirect() &&
+                win.located_on_workspace(workspace) &&
+                win.get_window_type() !== Meta.WindowType.DESKTOP &&
+                !win.is_hidden();
+        });
 
-            log(`[WACK Shell] _cacheWindowTextures: ${actors.length} candidate window actor(s) found`);
+        log(`[WACK Shell] _cacheWindowTextures: ${actors.length} candidate window actor(s) found`);
 
-            actors.forEach(actor => {
-                const win = actor.metaWindow;
-                if (!win) return;
-                const bufferRect = win.get_buffer_rect();
-                const content = actor.paint_to_content(null);
-                const title = win.get_title?.() ?? '(no title)';
-                if (content) {
-                    global.wack_window_snapshots.push({
-                        content: content,
-                        rect: {
-                            x: bufferRect.x,
-                            y: bufferRect.y,
-                            width: bufferRect.width,
-                            height: bufferRect.height
-                        }
-                    });
-                    log(`[WACK Shell] cached "${title}" bufferRect=${bufferRect.x},${bufferRect.y} ${bufferRect.width}x${bufferRect.height}`);
-                } else {
-                    log(`[WACK Shell] paint_to_content returned null/falsy for "${title}" — SKIPPED`);
-                }
-            });
+        actors.forEach(actor => {
+            const win = actor.metaWindow;
+            if (!win) return;
+            const bufferRect = win.get_buffer_rect();
+            const content = actor.paint_to_content(null);
+            const title = win.get_title?.() ?? '(no title)';
+            if (content) {
+                global.wack_window_snapshots.push({
+                    content: content,
+                    rect: {
+                        x: bufferRect.x,
+                        y: bufferRect.y,
+                        width: bufferRect.width,
+                        height: bufferRect.height
+                    }
+                });
+                log(`[WACK Shell] cached "${title}" bufferRect=${bufferRect.x},${bufferRect.y} ${bufferRect.width}x${bufferRect.height}`);
+            } else {
+                log(`[WACK Shell] paint_to_content returned null/falsy for "${title}" — SKIPPED`);
+            }
+        });
 
-            log(`[WACK Shell] _cacheWindowTextures: total cached = ${global.wack_window_snapshots.length}`);
-        } catch (err) {
-            logError(err, 'WACK Shell: Failed to cache window textures');
-        }
+        log(`[WACK Shell] _cacheWindowTextures: total cached = ${global.wack_window_snapshots.length}`);
     }
 
     _destroyWindowCache() {
@@ -372,17 +362,43 @@ export default class WackShellExtension extends Extension {
         }
 
         this._origComputeWorkspacesBoxForState = controls.layout_manager._computeWorkspacesBoxForState;
+        this._origGetAppDisplayBoxForState = controls.layout_manager._getAppDisplayBoxForState;
         this._origUpdate = controls._update;
         this._origOnSearchChanged = controls._onSearchChanged;
 
         const self = this;
 
-        controls.layout_manager._computeWorkspacesBoxForState = function (state, ...args) {
-            const workspaceBox = self._origComputeWorkspacesBoxForState.call(this, state, ...args);
+        // Reduce the reserved workspace area in App Grid state from GNOME's
+        // default 15% to APP_GRID_WORKSPACE_RATIO — but ONLY when the workspace
+        // view is disabled. When it's visible the user sees the real thumbnail,
+        // so GNOME's native ratio is left untouched.
+        controls.layout_manager._computeWorkspacesBoxForState = function (state, box, searchHeight, dashHeight, thumbnailsHeight, spacing) {
+            const workspaceBox = self._origComputeWorkspacesBoxForState.call(
+                this, state, box, searchHeight, dashHeight, thumbnailsHeight, spacing);
             if (state === OverviewControls.ControlsState.APP_GRID && self._disableWorkspacesInAppGrid) {
-                workspaceBox.set_size(workspaceBox.get_width(), 0);
+                const [width] = workspaceBox.get_size();
+                const [, boxHeight] = box.get_size();
+                workspaceBox.set_size(width, Math.round(boxHeight * APP_GRID_WORKSPACE_RATIO));
             }
             return workspaceBox;
+        };
+
+        // Instead of collapsing the workspace to height=0 (which corrupts
+        // WorkspaceLayout._windowSlots and causes the slide-in blip), we keep
+        // the workspace at its real allocation and only hide it via opacity.
+        //
+        // The emptyBox trick is applied to ALL states (not just APP_GRID) so
+        // that the app grid has identical sizing at both ends of the
+        // WINDOW_PICKER→APP_GRID transition. Without this, GNOME interpolates
+        // between a smaller initial-state size and a larger final-state size,
+        // causing the app grid icons to reflow mid-animation ("two faces").
+        controls.layout_manager._getAppDisplayBoxForState = function (state, box, searchHeight, dashHeight, workspacesBox, spacing) {
+            if (self._disableWorkspacesInAppGrid) {
+                const emptyBox = workspacesBox.copy();
+                emptyBox.set_size(emptyBox.get_width(), 0);
+                return self._origGetAppDisplayBoxForState.call(this, state, box, searchHeight, dashHeight, emptyBox, spacing);
+            }
+            return self._origGetAppDisplayBoxForState.call(this, state, box, searchHeight, dashHeight, workspacesBox, spacing);
         };
 
         controls._update = function () {
@@ -417,20 +433,17 @@ export default class WackShellExtension extends Extension {
         if (!adjustment)
             return 255;
 
+        // Ease-out cubic fade: the workspace stays at full opacity for most of
+        // the WINDOW_PICKER→APP_GRID transition, then rapidly drops off toward
+        // the end. Curve: opacity = 1 - t³  (t=0 → fully visible, t=1 → gone).
+        // This gives the "shows wholly to an extent, then gracefully fades out"
+        // feel — as opposed to a linear fade which drops uniformly from the start.
         const v = adjustment.value;
-        if (v >= 1.0) {
-            const p = v - 1.0;
-            const scale = 1.0 - p;
+        if (v <= 1.0)
+            return 255;
 
-            const startSize = 0.225;
-
-            if (scale >= startSize) {
-                return 255;
-            } else {
-                return Math.max(0, Math.round(255 * (scale / startSize)));
-            }
-        }
-        return 255;
+        const progress = Math.min(1.0, v - 1.0);
+        return Math.max(0, Math.round(255 * (1.0 - progress * progress * progress)));
     }
 
     _updateWorkspacesOpacity(controls) {
@@ -447,6 +460,10 @@ export default class WackShellExtension extends Extension {
             if (this._origComputeWorkspacesBoxForState && controls.layout_manager) {
                 controls.layout_manager._computeWorkspacesBoxForState = this._origComputeWorkspacesBoxForState;
                 this._origComputeWorkspacesBoxForState = null;
+            }
+            if (this._origGetAppDisplayBoxForState && controls.layout_manager) {
+                controls.layout_manager._getAppDisplayBoxForState = this._origGetAppDisplayBoxForState;
+                this._origGetAppDisplayBoxForState = null;
             }
             if (this._origUpdate) {
                 controls._update = this._origUpdate;
@@ -470,23 +487,19 @@ export default class WackShellExtension extends Extension {
     }
 
     _resetWindowsOpacity() {
-        try {
-            const workspace = global.workspace_manager.get_active_workspace();
-            const windows = workspace.list_windows().filter(metaWindow => {
-                return !metaWindow.is_hidden() &&
-                    metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
-                    !metaWindow.is_attached_dialog();
-            });
-            const windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
-            windowActors.forEach(actor => {
-                actor.remove_all_transitions();
-                actor.opacity = 255;
-                actor.scale_x = 1.0;
-                actor.scale_y = 1.0;
-            });
-        } catch (err) {
-            logError(err, 'WACK Shell: Failed to reset windows opacity');
-        }
+        const workspace = global.workspace_manager.get_active_workspace();
+        const windows = workspace.list_windows().filter(metaWindow => {
+            return !metaWindow.is_hidden() &&
+                metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
+                !metaWindow.is_attached_dialog();
+        });
+        const windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
+        windowActors.forEach(actor => {
+            actor.remove_all_transitions();
+            actor.opacity = 255;
+            actor.scale_x = 1.0;
+            actor.scale_y = 1.0;
+        });
     }
 
     _initProximity() {
