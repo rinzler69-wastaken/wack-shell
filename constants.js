@@ -153,5 +153,53 @@ export const DISTRO_LOGOS = [
 // When 'Disable Workspace View in App Grid' is ON the workspace is hidden via
 // opacity anyway, but this ratio still governs the hidden reserved area.
 // Accepted range: 0.001 – 0.15. Change and reload to fine-tune.
-export const APP_GRID_WORKSPACE_RATIO = 0.001;
+export const APP_GRID_WORKSPACE_RATIO = 0.0075;
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Tunable: workspace fade-out virtual range in App Grid transition ─────────
+// Controls the "virtual" fade length relative to the real transition range.
+//
+// The state adjustment's progress runs 0 → 1 over the WINDOW_PICKER → APP_GRID
+// leg. This constant extends the notional endpoint beyond 1, so the fade starts
+// immediately at progress=0 but would only reach opacity=0 at progress=RANGE.
+// Since the real progress is clamped to 1, the workspace fades proportionally
+// across the whole gesture without ever fully disappearing within it.
+//
+// The key benefit over a delayed-start approach: reversing mid-gesture always
+// tracks opacity smoothly backwards — no hold-then-snap discontinuity.
+//
+// Formula:  t = progress / RANGE  →  opacity = 255 * (1 - t)
+//
+// Examples:
+//   1.0  → standard linear fade, reaches 0 exactly at progress=1
+//   1.5  → at progress=1, opacity ≈ 85  (¹⁄₃ of 255 still visible)
+//   2.0  → at progress=1, opacity ≈ 127 (half still visible, very gradual)
+//
+// Accepted range: 1.0 – 4.0. Change and reload to fine-tune.
+export const APP_GRID_WORKSPACE_FADE_RANGE = 2.0;
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Tunable: ease-out-quad snap-in threshold ───────────────────────────────
+// The fade uses two phases:
+//
+//   Phase 1 (progress 0 → SNAP): virtual-range linear lerp
+//     Smooth, proportional, and fully reversible mid-gesture.
+//
+//   Phase 2 (progress SNAP → 1): ease-out-quad finishing curve
+//     Picks up at exactly the opacity the linear phase left off, then drives
+//     it to 0 with an ease-out-quad arc (α² deceleration toward transparent).
+//     This is the equivalent of the closing kick that was previously handled
+//     by the ease-out cubic.
+//
+// Set this to the progress value at which the workspace box has shrunk to
+// roughly APP_GRID_WORKSPACE_RATIO size — i.e. near the very end of the
+// WINDOW_PICKER → APP_GRID leg.
+//
+// Examples:
+//   0.85 → quad kicks in for the last 15% of the transition (recommended)
+//   0.90 → quad covers the last 10% — snappier finish
+//   0.75 → quad covers the last 25% — gentler finish
+//
+// Accepted range: 0.5 – 0.99. Change and reload to fine-tune.
+export const APP_GRID_WORKSPACE_FADE_SNAP = 0.875;
 // ─────────────────────────────────────────────────────────────────────────────

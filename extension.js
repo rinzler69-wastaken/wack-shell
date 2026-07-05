@@ -15,7 +15,10 @@ import {
     WackWorkspaceButton
 } from './panelComponents.js';
 import VibrancyManager from './vibrancyManager.js';
-import { APP_GRID_WORKSPACE_RATIO } from './constants.js';
+import { APP_GRID_WORKSPACE_RATIO, APP_GRID_WORKSPACE_FADE_RANGE, APP_GRID_WORKSPACE_FADE_SNAP } from './constants.js';
+
+
+
 
 export default class WackShellExtension extends Extension {
     enable() {
@@ -433,17 +436,30 @@ export default class WackShellExtension extends Extension {
         if (!adjustment)
             return 255;
 
-        // Ease-out cubic fade: the workspace stays at full opacity for most of
-        // the WINDOW_PICKER→APP_GRID transition, then rapidly drops off toward
-        // the end. Curve: opacity = 1 - t³  (t=0 → fully visible, t=1 → gone).
-        // This gives the "shows wholly to an extent, then gracefully fades out"
-        // feel — as opposed to a linear fade which drops uniformly from the start.
         const v = adjustment.value;
         if (v <= 1.0)
             return 255;
 
         const progress = Math.min(1.0, v - 1.0);
-        return Math.max(0, Math.round(255 * (1.0 - progress * progress * progress)));
+
+        if (progress < APP_GRID_WORKSPACE_FADE_SNAP) {
+            // Phase 1: virtual-range linear lerp.
+            // Starts immediately at progress=0 and is always proportional,
+            // so mid-gesture reversal tracks opacity smoothly with no snap.
+            //   t = progress / FADE_RANGE  →  opacity = 255 * (1 - t)
+            const t = progress / APP_GRID_WORKSPACE_FADE_RANGE;
+            return Math.max(0, Math.round(255 * (1.0 - t)));
+        }
+
+        // Phase 2: ease-out-quad finishing curve.
+        // Picks up at the exact opacity the linear phase left off at SNAP,
+        // then drives it to 0 using (1 - q)² — fast initial drop that
+        // decelerates as it approaches transparent (ease-out on the fade-out).
+        //   q = (progress - SNAP) / (1 - SNAP)  [0 → 1]
+        //   opacity = opacityAtSnap * (1 - q)²
+        const opacityAtSnap = 255 * (1.0 - APP_GRID_WORKSPACE_FADE_SNAP / APP_GRID_WORKSPACE_FADE_RANGE);
+        const q = (progress - APP_GRID_WORKSPACE_FADE_SNAP) / (1.0 - APP_GRID_WORKSPACE_FADE_SNAP);
+        return Math.max(0, Math.round(opacityAtSnap * (1.0 - q) * (1.0 - q)));
     }
 
     _updateWorkspacesOpacity(controls) {
