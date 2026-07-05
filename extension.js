@@ -17,6 +17,14 @@ import {
 import VibrancyManager from './vibrancyManager.js';
 import { APP_GRID_WORKSPACE_RATIO, APP_GRID_WORKSPACE_FADE_RANGE, APP_GRID_WORKSPACE_FADE_SNAP } from './constants.js';
 
+const PowerProfilesIface = `<node>
+<interface name="net.hadess.PowerProfiles">
+    <property name="ActiveProfile" type="s" access="readwrite"/>
+</interface>
+</node>`;
+
+const PowerProfilesProxy = Gio.DBusProxy.makeProxyWrapper(PowerProfilesIface);
+
 
 
 
@@ -57,14 +65,45 @@ export default class WackShellExtension extends Extension {
         this._vibrancyManager = new VibrancyManager(this);
         this._vibrancyManager.enable();
 
-        this._setupWindowCache();
-        this._initWorkspacesAppGrid();
+        this._windowSnapshotCachingEnabled = true;
 
         try {
             this._lockscreenSettings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.wack-lockscreen-clock' });
+            this._lockscreenSettings.connectObject(
+                'changed::lockscreen-mode', () => this._syncWindowSnapshotCaching(),
+                'changed::cupertino-unlock-fade', () => this._syncWindowSnapshotCaching(),
+                this
+            );
         } catch {
             this._lockscreenSettings = null;
         }
+
+        this._powerProfilesProxy = null;
+        try {
+            this._powerProfilesProxy = new PowerProfilesProxy(
+                Gio.DBus.system,
+                'net.hadess.PowerProfiles',
+                '/net/hadess/PowerProfiles',
+                (_proxy, error) => {
+                    if (error) {
+                        logError(error, 'WACK Shell: PowerProfiles proxy error');
+                        this._syncWindowSnapshotCaching();
+                        return;
+                    }
+                    this._powerProfilesProxy.connectObject('g-properties-changed', () => {
+                        this._syncWindowSnapshotCaching();
+                    }, this);
+                    this._syncWindowSnapshotCaching();
+                }
+            );
+        } catch (e) {
+            logError(e, 'WACK Shell: Failed to initialize PowerProfiles proxy');
+        }
+
+        this._syncWindowSnapshotCaching();
+
+        this._setupWindowCache();
+        this._initWorkspacesAppGrid();
     }
 
     disable() {
@@ -126,7 +165,11 @@ export default class WackShellExtension extends Extension {
         }
         this._destroyWindowCache();
         this._destroyWorkspacesAppGrid();
+        this._windowSnapshotCachingEnabled = false;
+        this._lockscreenSettings?.disconnectObject(this);
         this._lockscreenSettings = null;
+        this._powerProfilesProxy?.disconnectObject(this);
+        this._powerProfilesProxy = null;
     }
 
     _syncLogoMenu() {
@@ -281,8 +324,13 @@ export default class WackShellExtension extends Extension {
         if (shield) {
             this._origShieldActivate = shield.activate.bind(shield);
             shield.activate = (animate) => {
-                log('[WACK Shell] shield.activate intercepted, caching window textures');
-                this._cacheWindowTextures();
+                if (this._windowSnapshotCachingEnabled) {
+                    log('[WACK Shell] shield.activate intercepted, caching window textures');
+                    this._cacheWindowTextures();
+                } else {
+                    log('[WACK Shell] shield.activate intercepted, skipping window texture cache');
+                    global.wack_window_snapshots = [];
+                }
                 return this._origShieldActivate(animate);
             };
         }
@@ -500,6 +548,34 @@ export default class WackShellExtension extends Extension {
 
     _isLockscreenCupertinoMode() {
         return this._lockscreenSettings?.get_string('lockscreen-mode') === 'cupertino';
+    }
+
+    _isLockscreenUnlockFadeEnabled() {
+        return this._lockscreenSettings?.get_boolean('cupertino-unlock-fade') ?? false;
+    }
+
+    _isPowerSaverActive() {
+        try {
+            return this._powerProfilesProxy?.ActiveProfile === 'power-saver';
+        } catch (e) {
+            logError(e, 'WACK Shell: Failed to read Power Saver state');
+            return false;
+        }
+    }
+
+    _syncWindowSnapshotCaching() {
+        try {
+            if (!this._lockscreenSettings) {
+                this._windowSnapshotCachingEnabled = true;
+                return;
+            }
+            this._windowSnapshotCachingEnabled = this._isLockscreenCupertinoMode() &&
+                this._isLockscreenUnlockFadeEnabled() &&
+                !this._isPowerSaverActive();
+        } catch (e) {
+            logError(e, 'WACK Shell: Failed to sync window snapshot gating');
+            this._windowSnapshotCachingEnabled = true;
+        }
     }
 
     _resetWindowsOpacity() {
