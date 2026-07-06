@@ -46,7 +46,8 @@ const WackBlurEffect = GObject.registerClass(
     { GTypeName: 'WackShellPanelBlurEffect' },
     class WackBlurEffect extends _BlurEffect {
         constructor({ unscaled_radius, brightness }) {
-            super({ mode: _BlurMode.BACKGROUND, brightness });
+            super({ mode: _BlurMode.BACKGROUND });
+            this.brightness = brightness;
 
             this._themeCtx = St.ThemeContext.get_for_stage(global.stage);
             this._themeCtx.connectObject(
