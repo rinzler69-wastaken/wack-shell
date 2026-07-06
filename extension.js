@@ -125,6 +125,8 @@ export default class WackShellExtension extends Extension {
     }
 
     disable() {
+        // NOTE: This extension supports 'unlock-dialog' session mode to preserve window snapshots
+        // and avoid resource tear-down overhead during Sonoma Lockscreen's unlock crossfade transition.
         log('[WACK Shell] disable() called');
         this._activities?.container?.disconnectObject(this);
         this._activities = null;
