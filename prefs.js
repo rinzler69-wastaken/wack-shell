@@ -124,16 +124,6 @@ export default class WackShellPreferences extends ExtensionPreferences {
         });
 
         let donations = this.metadata.donations;
-        if (!donations && this.dir) {
-            try {
-                const file = this.dir.get_child('metadata.json');
-                const [, contents] = file.load_contents(null);
-                const decoder = new TextDecoder('utf-8');
-                donations = JSON.parse(decoder.decode(contents)).donations;
-            } catch (e) {
-                console.error('Failed to parse metadata.json:', e);
-            }
-        }
         donations = donations || {
             paypal: 'ArtFazil',
             kofi: 'mikerinzler69',
