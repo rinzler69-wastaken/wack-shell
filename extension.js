@@ -371,7 +371,26 @@ export default class WackShellExtension extends Extension {
                 !win.is_hidden();
         });
 
-        actors.forEach(actor => {
+        // Traverse front-to-back (top-to-bottom z-order) and select visible window actors
+        const reversedActors = actors.slice().reverse();
+        const selectedActors = [];
+        for (const actor of reversedActors) {
+            selectedActors.push(actor);
+            const win = actor.metaWindow;
+            if (win) {
+                const isMaximized = win.maximized_horizontally && win.maximized_vertically;
+                const isFullscreen = win.is_fullscreen();
+                if (isMaximized || isFullscreen) {
+                    break;
+                }
+            }
+        }
+
+        // Restore original bottom-to-top z-order for correct overlay rendering
+        selectedActors.reverse();
+
+        // Paint only the selected window actors
+        selectedActors.forEach(actor => {
             const win = actor.metaWindow;
             if (!win) return;
             const bufferRect = win.get_buffer_rect();
@@ -728,7 +747,7 @@ export default class WackShellExtension extends Extension {
     _unloadProximityStylesheet() {
         try {
             this._themeContext.get_theme().unload_stylesheet(this._customCssFile);
-        } catch (e) {}
+        } catch (e) { }
         this._themeId = false;
     }
 
