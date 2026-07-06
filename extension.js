@@ -125,8 +125,6 @@ export default class WackShellExtension extends Extension {
     }
 
     disable() {
-        // NOTE: This extension supports 'unlock-dialog' session mode to preserve window snapshots
-        // and avoid resource tear-down overhead during Sonoma Lockscreen's unlock crossfade transition.
         console.debug('[WACK Shell] disable() called');
         this._activities?.container?.disconnectObject(this);
         this._activities = null;
@@ -181,11 +179,14 @@ export default class WackShellExtension extends Extension {
             this._appMenuButton = null;
         }
 
+        const currentMode = Main.sessionMode.currentMode;
+        const isLockscreen = currentMode === 'unlock-dialog' || currentMode === 'greeter';
+
         // Restore native activities button (if not locked)
-        if (Main.sessionMode.currentMode !== 'unlock-dialog') {
+        if (!isLockscreen) {
             Main.panel.statusArea['activities']?.container.show();
         }
-        this._destroyWindowCache();
+        this._destroyWindowCache(isLockscreen);
         this._destroyWorkspacesAppGrid();
         this._windowSnapshotCachingEnabled = false;
         this._lockscreenSettings?.disconnectObject(this);
@@ -336,7 +337,8 @@ export default class WackShellExtension extends Extension {
     }
 
     _setupWindowCache() {
-        global.wack_window_snapshots = [];
+        if (!global.wack_window_snapshots)
+            global.wack_window_snapshots = [];
 
         const shield = Main.screenShield;
         if (shield) {
@@ -409,12 +411,13 @@ export default class WackShellExtension extends Extension {
         });
     }
 
-    _destroyWindowCache() {
+    _destroyWindowCache(preserveSnapshots = false) {
         if (Main.screenShield && this._origShieldActivate) {
             Main.screenShield.activate = this._origShieldActivate;
             this._origShieldActivate = null;
         }
-        this._clearWindowSnapshots();
+        if (!preserveSnapshots)
+            this._clearWindowSnapshots();
     }
 
     _initWorkspacesAppGrid() {
