@@ -499,6 +499,17 @@ export default class VibrancyManager {
         }
 
         this._vibrancyStyleActive = true;
+
+        const isLockMode = Main.sessionMode.currentMode === 'unlock-dialog';
+        const isShieldActive = Main.screenShield && (Main.screenShield.active || Main.screenShield.locked);
+        const isOverviewActive = Main.overview.visible || Main.overview.visibleTarget;
+
+        if (!isLockMode && !isShieldActive && !isOverviewActive) {
+            global.wack_panel_cached_classes = Main.panel.get_style_class_name() || '';
+            global.wack_panel_cached_style = Main.panel.style || '';
+            global.wack_panel_cached_proximity_bg = null;
+            global.wack_panel_cached_proximity_fg = null;
+        }
     }
 
     _isDarkColorScheme() {

@@ -32,6 +32,14 @@ export default class WackShellExtension extends Extension {
     enable() {
         console.debug('[WACK Shell] enable() called');
         this._settings = this.getSettings();
+        this.lastPanelStateIsProximity = false;
+        global.wack_proximity_active = false;
+        global.wack_proximity_bg = null;
+        global.wack_proximity_fg = null;
+        global.wack_panel_cached_style = '';
+        global.wack_panel_cached_classes = '';
+        global.wack_panel_cached_proximity_bg = null;
+        global.wack_panel_cached_proximity_fg = null;
 
         // Hide native activities button and suppress it from showing up
         const activities = Main.panel.statusArea['activities'];
@@ -126,6 +134,14 @@ export default class WackShellExtension extends Extension {
 
     disable() {
         console.debug('[WACK Shell] disable() called');
+        this.lastPanelStateIsProximity = false;
+        delete global.wack_proximity_active;
+        delete global.wack_proximity_bg;
+        delete global.wack_proximity_fg;
+        delete global.wack_panel_cached_style;
+        delete global.wack_panel_cached_classes;
+        delete global.wack_panel_cached_proximity_bg;
+        delete global.wack_panel_cached_proximity_fg;
         this._activities?.container?.disconnectObject(this);
         this._activities = null;
 
@@ -777,6 +793,9 @@ export default class WackShellExtension extends Extension {
         const bgCss = bg.replace(/'/g, '');
         const fgCss = fg.replace(/'/g, '');
 
+        global.wack_proximity_bg = bgCss;
+        global.wack_proximity_fg = fgCss;
+
         const cssString = `
 #panel.panel-proximity {
     background-color: ${bgCss} !important;
@@ -859,6 +878,8 @@ export default class WackShellExtension extends Extension {
         }
 
         if (!this._settings.get_boolean('enable-panel-proximity')) {
+            this.lastPanelStateIsProximity = false;
+            global.wack_proximity_active = false;
             this._clearPanelStyle();
             return;
         }
@@ -896,8 +917,12 @@ export default class WackShellExtension extends Extension {
         });
 
         if (windowNearPanel) {
+            this.lastPanelStateIsProximity = true;
+            global.wack_proximity_active = true;
             this._applyPanelStyle();
         } else {
+            this.lastPanelStateIsProximity = false;
+            global.wack_proximity_active = false;
             this._clearPanelStyle();
         }
     }
@@ -911,6 +936,20 @@ export default class WackShellExtension extends Extension {
         }
 
         Main.panel.set_style(null);
+
+        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog';
+        const isShieldActive = Main.screenShield && (Main.screenShield.active || Main.screenShield.locked);
+        const isOverview = Main.overview.visible || Main.overview.visibleTarget;
+
+        if (!isLockscreen && !isShieldActive && !isOverview) {
+            global.wack_panel_cached_classes = Main.panel.get_style_class_name() || '';
+            global.wack_panel_cached_style = '';
+            const isDark = this._isProximityDarkMode();
+            const bg = this._settings.get_string(isDark ? 'dark-bg-color' : 'light-bg-color');
+            const fg = this._settings.get_string(isDark ? 'dark-fg-color' : 'light-fg-color');
+            global.wack_panel_cached_proximity_bg = bg.replace(/'/g, '');
+            global.wack_panel_cached_proximity_fg = fg.replace(/'/g, '');
+        }
     }
 
     _clearPanelStyle() {
