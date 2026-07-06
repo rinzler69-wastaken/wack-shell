@@ -29,8 +29,8 @@ const PowerProfilesProxy = Gio.DBusProxy.makeProxyWrapper(PowerProfilesIface);
 
 
 export default class WackShellExtension extends Extension {
+
     enable() {
-        console.debug('[WACK Shell] enable() called');
         this._settings = this.getSettings();
 
         // Hide native activities button and suppress it from showing up
@@ -92,8 +92,7 @@ export default class WackShellExtension extends Extension {
                     }
                 }
             }
-        } catch (e) {
-            console.error('WACK Shell: Failed to load wack-lockscreen-clock settings', e);
+        } catch {
         }
 
         this._powerProfilesProxy = null;
@@ -104,7 +103,6 @@ export default class WackShellExtension extends Extension {
                 '/net/hadess/PowerProfiles',
                 (_proxy, error) => {
                     if (error) {
-                        console.error('WACK Shell: PowerProfiles proxy error', error);
                         this._syncWindowSnapshotCaching();
                         return;
                     }
@@ -114,20 +112,19 @@ export default class WackShellExtension extends Extension {
                     this._syncWindowSnapshotCaching();
                 }
             );
-        } catch (e) {
-            console.error('WACK Shell: Failed to initialize PowerProfiles proxy', e);
+        } catch {
         }
 
         this._syncWindowSnapshotCaching();
 
         this._setupWindowCache();
+
         this._initWorkspacesAppGrid();
     }
 
     disable() {
-        // NOTE: This extension supports 'unlock-dialog' session mode to preserve window snapshots
-        // and avoid resource tear-down overhead during Sonoma Lockscreen's unlock crossfade transition.
-        console.debug('[WACK Shell] disable() called');
+        // The unlock-dialog mode keeps WACK widgets and window snapshots alive
+        // for the companion Sonoma lockscreen's Cupertino unlock crossfade.
         this._activities?.container?.disconnectObject(this);
         this._activities = null;
 
@@ -248,14 +245,10 @@ export default class WackShellExtension extends Extension {
     }
 
     _syncSessionModeUI() {
-        const currentMode = Main.sessionMode.currentMode;
-        const isUnlockDialog = currentMode === 'unlock-dialog' || currentMode === 'greeter' || currentMode === 'gdm';
         const hasWindows = Main.sessionMode.hasWindows;
         const isLocked = !hasWindows;
         const opacity = isLocked ? 0 : 255;
         const visible = !isLocked;
-
-        console.debug(`[WACK Shell] _syncSessionModeUI called. currentMode=${currentMode}, isUnlockDialog=${isUnlockDialog}, hasWindows=${hasWindows}, isLocked=${isLocked}, visible=${visible}`);
 
         if (this._logoButton) {
             this._logoButton.opacity = opacity;
@@ -324,12 +317,8 @@ export default class WackShellExtension extends Extension {
         // Ensure windows are reset to full opacity and scale when transitioning from locked to unlocked
         if (hasWindows && this._lastHasWindows === false) {
             this._resetWindowsOpacity();
-            if (Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode()) {
-                console.debug(`[WACK Shell] _syncSessionModeUI: preserving wack_window_snapshots during Cupertino unlock handoff (${global.wack_window_snapshots?.length ?? 0} cached)`);
-            } else {
-                console.debug(`[WACK Shell] _syncSessionModeUI: hasWindows flipped true, clearing wack_window_snapshots (was ${global.wack_window_snapshots?.length ?? 0})`);
+            if (!(Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode()))
                 global.wack_window_snapshots = [];
-            }
         }
 
         this._lastHasWindows = hasWindows;
@@ -338,14 +327,18 @@ export default class WackShellExtension extends Extension {
     _setupWindowCache() {
         global.wack_window_snapshots = [];
 
+        // Idempotency: Do not patch if we have already patched.
+        if (this._origShieldActivate) return;
+
         const shield = Main.screenShield;
         if (shield) {
             this._origShieldActivate = shield.activate.bind(shield);
             shield.activate = (animate) => {
-                if (this._windowSnapshotCachingEnabled)
+                if (this._windowSnapshotCachingEnabled) {
                     this._cacheWindowTextures();
-                else
+                } else {
                     this._clearWindowSnapshots();
+                }
                 return this._origShieldActivate(animate);
             };
         }
@@ -442,7 +435,6 @@ export default class WackShellExtension extends Extension {
 
         const controls = Main.overview._overview?._controls;
         if (!controls || !controls.layout_manager) {
-            console.error('WACK Shell: Main.overview._overview._controls.layout_manager is not initialized');
             return;
         }
 
@@ -591,8 +583,7 @@ export default class WackShellExtension extends Extension {
     _isPowerSaverActive() {
         try {
             return this._powerProfilesProxy?.ActiveProfile === 'power-saver';
-        } catch (e) {
-            console.error('WACK Shell: Failed to read Power Saver state', e);
+        } catch {
             return false;
         }
     }
@@ -606,8 +597,7 @@ export default class WackShellExtension extends Extension {
             this._windowSnapshotCachingEnabled = this._isLockscreenCupertinoMode() &&
                 this._isLockscreenUnlockFadeEnabled() &&
                 !this._isPowerSaverActive();
-        } catch (e) {
-            console.error('WACK Shell: Failed to sync window snapshot gating', e);
+        } catch {
             this._windowSnapshotCachingEnabled = true;
         }
     }
@@ -685,14 +675,14 @@ export default class WackShellExtension extends Extension {
         );
 
         Main.overview.connectObject(
-            'showing', () => this._updatePanelVisibility(),
-            'hiding', () => this._updatePanelVisibility(),
-            'hidden', () => this._updatePanelVisibility(),
+            'showing', () => this._queueUpdatePanelVisibility(),
+            'hiding', () => this._queueUpdatePanelVisibility(),
+            'hidden', () => this._queueUpdatePanelVisibility(),
             this
         );
 
         Main.sessionMode.connectObject(
-            'updated', () => this._updatePanelVisibility(),
+            'updated', () => this._queueUpdatePanelVisibility(),
             this
         );
 
@@ -747,7 +737,7 @@ export default class WackShellExtension extends Extension {
     _unloadProximityStylesheet() {
         try {
             this._themeContext.get_theme().unload_stylesheet(this._customCssFile);
-        } catch (e) { }
+        } catch { }
         this._themeId = false;
     }
 
@@ -813,9 +803,7 @@ export default class WackShellExtension extends Extension {
             (file, res) => {
                 try {
                     file.replace_contents_finish(res);
-                } catch (e) {
-                    if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
-                        console.error('wack-shell-proximity: Error writing custom stylesheet', e);
+                } catch {
                     return;
                 }
 
@@ -836,6 +824,7 @@ export default class WackShellExtension extends Extension {
             GLib.source_remove(this._queuedUpdateId);
             this._queuedUpdateId = null;
         }
+
         this._queuedUpdateId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._queuedUpdateId = null;
             this._updatePanelVisibility();
@@ -912,8 +901,9 @@ export default class WackShellExtension extends Extension {
 
     _clearPanelStyle() {
         Main.panel.remove_style_class_name('panel-proximity');
-
         if (this._vibrancyManager && this._vibrancyManager.vibrancyActive) {
+            // If vibrancy is active, immediately apply its style to prevent a flicker
+            // where the panel would otherwise revert to the default theme for a frame.
             this._vibrancyManager.applyVibrancyStyle();
         }
     }

@@ -91,7 +91,7 @@ export default class VibrancyManager {
                     this._syncVibrancy();
                 }
             }, this);
-        } catch (e) {
+        } catch {
             // extensionManager may not support connectObject in all versions
         }
 
@@ -157,9 +157,8 @@ export default class VibrancyManager {
             this._currentColors = colors;
             this._retryCount = 0;
             this.applyVibrancyStyle();
-        } catch (e) {
+        } catch {
             if (runId === this._updateColorsId) {
-                console.error('WACK Shell: Failed to update wallpaper colors', e);
                 this._currentColors = null;
                 this.applyVibrancyStyle();
 
@@ -383,36 +382,40 @@ export default class VibrancyManager {
         this.applyVibrancyStyle();
     }
 
-    applyVibrancyStyle() {
+    _clearVibrancyStyling() {
+        if (this._vibrancyStyleActive) {
+            this._settingStyle = true;
+            try {
+                Main.panel.set_style(null);
+                Main.panel.remove_style_class_name('panel-ventura-light');
+                Main.panel.remove_style_class_name('panel-bigsur');
+                Main.panel.remove_style_class_name('light-contrast');
+            } finally {
+                this._settingStyle = false;
+            }
+            this._vibrancyStyleActive = false;
+        }
+    }
+
+    applyVibrancyStyle(proximityActive = false) {
         const enabled = this._settings.get_boolean('enable-vibrancy');
         const blurMode = this._settings.get_int('vibrancy-blur-mode');
         const style = this._settings.get_int('vibrancy-style');
         const bmsConflict = this._bmsHasPanelBlur();
         const vibrancyClasses = ['panel-ventura-light', 'panel-bigsur'];
 
-        const clearVibrancyClasses = () => {
-            for (const cls of vibrancyClasses) {
-                Main.panel.remove_style_class_name(cls);
-            }
-        };
-
         if (!enabled) {
-            if (this._vibrancyStyleActive) {
-                this._settingStyle = true;
-                try {
-                    Main.panel.set_style(null);
-                    clearVibrancyClasses();
-                    Main.panel.remove_style_class_name('light-contrast');
-                } finally {
-                    this._settingStyle = false;
-                }
-                this._vibrancyStyleActive = false;
-            }
+            this._clearVibrancyStyling();
             return;
         }
 
-        if (Main.panel.has_style_class_name('panel-proximity'))
-            return;
+        // If proximity is active, remove our styles and let the proximity stylesheet take over.
+        if (proximityActive) {
+            this._clearVibrancyStyling();
+            Main.panel.add_style_class_name('panel-proximity');
+            return; // Let the proximity stylesheet take over
+        }
+        Main.panel.remove_style_class_name('panel-proximity');
 
         const isDark = this._isDarkColorScheme();
         const isOverview = Main.overview.visibleTarget;
@@ -448,7 +451,7 @@ export default class VibrancyManager {
             const absLc = Math.abs(contrastLc);
 
             let factor = Math.max(0, Math.min(1, (100.0 - absLc) / 100.0));
-
+            
             const maxVal = Math.max(avgR, avgG, avgB);
             const minVal = Math.min(avgR, avgG, avgB);
             const chroma = (maxVal - minVal) / 255.0;
@@ -463,7 +466,10 @@ export default class VibrancyManager {
 
         this._settingStyle = true;
         try {
-            clearVibrancyClasses();
+            for (const cls of vibrancyClasses) {
+                Main.panel.remove_style_class_name(cls);
+            }
+
             if (targetClass) {
                 Main.panel.add_style_class_name(targetClass);
             }
