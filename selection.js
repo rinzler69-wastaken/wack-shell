@@ -148,7 +148,7 @@ function _selectWindow(windows, x, y) {
     });
 
     filtered.sort((a, b) => {
-        return a.get_meta_window().get_layer() <= b.get_meta_window().get_layer();
+        return a.get_meta_window().get_layer() - b.get_meta_window().get_layer();
     });
 
     return filtered[0];

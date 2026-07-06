@@ -30,8 +30,18 @@ const PowerProfilesProxy = Gio.DBusProxy.makeProxyWrapper(PowerProfilesIface);
 
 export default class WackShellExtension extends Extension {
     enable() {
-        console.debug('[WACK Shell] enable() called');
         this._settings = this.getSettings();
+        this.lastPanelStateIsProximity = false;
+        global.wack_proximity_active = false;
+        global.wack_proximity_bg = null;
+        global.wack_proximity_fg = null;
+        global.wack_panel_cached_style = '';
+        global.wack_panel_cached_classes = '';
+        global.wack_panel_cached_proximity_bg = null;
+        global.wack_panel_cached_proximity_fg = null;
+        global.wack_panel_cached_foreground = null;
+        global.wack_panel_cached_blur_mode = null;
+        global.wack_panel_cached_brightness = null;
 
         // Hide native activities button and suppress it from showing up
         const activities = Main.panel.statusArea['activities'];
@@ -92,8 +102,7 @@ export default class WackShellExtension extends Extension {
                     }
                 }
             }
-        } catch (e) {
-            console.error('WACK Shell: Failed to load wack-lockscreen-clock settings', e);
+        } catch {
         }
 
         this._powerProfilesProxy = null;
@@ -102,20 +111,20 @@ export default class WackShellExtension extends Extension {
                 Gio.DBus.system,
                 'net.hadess.PowerProfiles',
                 '/net/hadess/PowerProfiles',
-                (_proxy, error) => {
+                (proxy, error) => {
                     if (error) {
-                        console.error('WACK Shell: PowerProfiles proxy error', error);
                         this._syncWindowSnapshotCaching();
                         return;
                     }
-                    this._powerProfilesProxy.connectObject('g-properties-changed', () => {
+                    if (!this._powerProfilesProxy)
+                        return;
+                    proxy.connectObject('g-properties-changed', () => {
                         this._syncWindowSnapshotCaching();
                     }, this);
                     this._syncWindowSnapshotCaching();
                 }
             );
-        } catch (e) {
-            console.error('WACK Shell: Failed to initialize PowerProfiles proxy', e);
+        } catch {
         }
 
         this._syncWindowSnapshotCaching();
@@ -125,9 +134,16 @@ export default class WackShellExtension extends Extension {
     }
 
     disable() {
-        // NOTE: This extension supports 'unlock-dialog' session mode to preserve window snapshots
-        // and avoid resource tear-down overhead during Sonoma Lockscreen's unlock crossfade transition.
-        console.debug('[WACK Shell] disable() called');
+        const currentMode = Main.sessionMode.currentMode;
+        const isLockscreen = currentMode === 'unlock-dialog' || currentMode === 'greeter' ||
+            currentMode === 'gdm' || Main.screenShield?.active || Main.screenShield?.locked;
+
+        if (isLockscreen)
+            this._cachePanelHandoffState();
+        else
+            this._clearPanelHandoffState();
+
+        this.lastPanelStateIsProximity = false;
         this._activities?.container?.disconnectObject(this);
         this._activities = null;
 
@@ -166,6 +182,8 @@ export default class WackShellExtension extends Extension {
         this._desktopSettings?.disconnectObject(this);
         this._desktopSettings = null;
 
+
+
         if (this._logoButton) {
             this._logoButton.destroy();
             this._logoButton = null;
@@ -182,16 +200,98 @@ export default class WackShellExtension extends Extension {
         }
 
         // Restore native activities button (if not locked)
-        if (Main.sessionMode.currentMode !== 'unlock-dialog') {
+        if (!isLockscreen) {
             Main.panel.statusArea['activities']?.container.show();
         }
-        this._destroyWindowCache();
+        this._destroyWindowCache(isLockscreen);
         this._destroyWorkspacesAppGrid();
         this._windowSnapshotCachingEnabled = false;
         this._lockscreenSettings?.disconnectObject(this);
         this._lockscreenSettings = null;
         this._powerProfilesProxy?.disconnectObject(this);
         this._powerProfilesProxy = null;
+    }
+
+
+    _clearPanelHandoffState() {
+        delete global.wack_proximity_active;
+        delete global.wack_proximity_bg;
+        delete global.wack_proximity_fg;
+        delete global.wack_panel_cached_style;
+        delete global.wack_panel_cached_classes;
+        delete global.wack_panel_cached_proximity_bg;
+        delete global.wack_panel_cached_proximity_fg;
+        delete global.wack_panel_cached_foreground;
+        delete global.wack_panel_cached_blur_mode;
+        delete global.wack_panel_cached_brightness;
+    }
+
+    _cachePanelHandoffState() {
+        const currentClasses = Main.panel.get_style_class_name() || '';
+        const proximityActive = Main.panel.has_style_class_name('panel-proximity') ||
+            this.lastPanelStateIsProximity || global.wack_proximity_active;
+
+        const classes = currentClasses.split(/\s+/).filter(Boolean);
+        global.wack_proximity_active = proximityActive;
+
+        const isLockscreenMode = Main.sessionMode.currentMode === 'unlock-dialog' ||
+            Main.sessionMode.currentMode === 'greeter' ||
+            Main.sessionMode.currentMode === 'gdm' ||
+            Main.screenShield?.active || Main.screenShield?.locked;
+
+        if (isLockscreenMode) {
+            global.wack_panel_cached_classes = global.wack_panel_cached_classes || currentClasses;
+            global.wack_panel_cached_style = global.wack_panel_cached_style || Main.panel.style || '';
+        } else {
+            global.wack_panel_cached_classes = currentClasses;
+            global.wack_panel_cached_style = Main.panel.style || '';
+        }
+
+        const cachedClassesList = (global.wack_panel_cached_classes || '').split(/\s+/).filter(Boolean);
+        global.wack_panel_cached_foreground = cachedClassesList.includes('light-contrast') ? 'rgb(20, 20, 20)' : null;
+
+        if (this._settings) {
+            let blurMode = this._settings.get_int('vibrancy-blur-mode');
+            if (blurMode === 3 && this._vibrancyManager) {
+                blurMode = this._vibrancyManager._isWallpaperLenient() ? 2 : 1;
+            }
+            global.wack_panel_cached_blur_mode = (blurMode === 1 || blurMode === 2) ? blurMode : 1;
+
+            const isDark = this._desktopSettings?.get_string('color-scheme') === 'prefer-dark';
+            const style = this._settings.get_int('vibrancy-style');
+            const borrowVenturaLight = this._vibrancyManager ? this._vibrancyManager._getBorrowVenturaLight() : false;
+            const useVenturaLight = (style === 2 || borrowVenturaLight) && !isDark;
+            const effectiveStyle = useVenturaLight ? 2 : 1;
+            const bmsConflict = this._vibrancyManager ? this._vibrancyManager._bmsHasPanelBlur() : false;
+            let brightness = 1.0;
+            if (!bmsConflict) {
+                brightness = (effectiveStyle === 2) ? 0.80 : (isDark ? 0.90 : 0.95);
+            }
+            global.wack_panel_cached_brightness = brightness;
+        }
+
+        if (!proximityActive)
+            return;
+
+        if (!classes.includes('panel-proximity'))
+            classes.push('panel-proximity');
+        global.wack_panel_cached_classes = classes.join(' ');
+        global.wack_panel_cached_style = '';
+
+        let bg = global.wack_proximity_bg;
+        let fg = global.wack_proximity_fg;
+        if ((!bg || !fg) && this._settings) {
+            try {
+                const isDark = this._desktopSettings?.get_string('color-scheme') === 'prefer-dark';
+                bg = this._settings.get_string(isDark ? 'dark-bg-color' : 'light-bg-color').replace(/'/g, '');
+                fg = this._settings.get_string(isDark ? 'dark-fg-color' : 'light-fg-color').replace(/'/g, '');
+            } catch {
+            }
+        }
+
+        global.wack_panel_cached_proximity_bg = bg || null;
+        global.wack_panel_cached_proximity_fg = fg || null;
+        global.wack_panel_cached_foreground = fg || global.wack_panel_cached_foreground;
     }
 
     _syncLogoMenu() {
@@ -248,14 +348,10 @@ export default class WackShellExtension extends Extension {
     }
 
     _syncSessionModeUI() {
-        const currentMode = Main.sessionMode.currentMode;
-        const isUnlockDialog = currentMode === 'unlock-dialog' || currentMode === 'greeter' || currentMode === 'gdm';
         const hasWindows = Main.sessionMode.hasWindows;
         const isLocked = !hasWindows;
         const opacity = isLocked ? 0 : 255;
         const visible = !isLocked;
-
-        console.debug(`[WACK Shell] _syncSessionModeUI called. currentMode=${currentMode}, isUnlockDialog=${isUnlockDialog}, hasWindows=${hasWindows}, isLocked=${isLocked}, visible=${visible}`);
 
         if (this._logoButton) {
             this._logoButton.opacity = opacity;
@@ -324,19 +420,16 @@ export default class WackShellExtension extends Extension {
         // Ensure windows are reset to full opacity and scale when transitioning from locked to unlocked
         if (hasWindows && this._lastHasWindows === false) {
             this._resetWindowsOpacity();
-            if (Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode()) {
-                console.debug(`[WACK Shell] _syncSessionModeUI: preserving wack_window_snapshots during Cupertino unlock handoff (${global.wack_window_snapshots?.length ?? 0} cached)`);
-            } else {
-                console.debug(`[WACK Shell] _syncSessionModeUI: hasWindows flipped true, clearing wack_window_snapshots (was ${global.wack_window_snapshots?.length ?? 0})`);
+            if (!(Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode()))
                 global.wack_window_snapshots = [];
-            }
         }
 
         this._lastHasWindows = hasWindows;
     }
 
     _setupWindowCache() {
-        global.wack_window_snapshots = [];
+        if (!global.wack_window_snapshots)
+            global.wack_window_snapshots = [];
 
         const shield = Main.screenShield;
         if (shield) {
@@ -409,12 +502,13 @@ export default class WackShellExtension extends Extension {
         });
     }
 
-    _destroyWindowCache() {
+    _destroyWindowCache(preserveSnapshots = false) {
         if (Main.screenShield && this._origShieldActivate) {
             Main.screenShield.activate = this._origShieldActivate;
             this._origShieldActivate = null;
         }
-        this._clearWindowSnapshots();
+        if (!preserveSnapshots)
+            this._clearWindowSnapshots();
     }
 
     _initWorkspacesAppGrid() {
@@ -442,7 +536,6 @@ export default class WackShellExtension extends Extension {
 
         const controls = Main.overview._overview?._controls;
         if (!controls || !controls.layout_manager) {
-            console.error('WACK Shell: Main.overview._overview._controls.layout_manager is not initialized');
             return;
         }
 
@@ -591,8 +684,7 @@ export default class WackShellExtension extends Extension {
     _isPowerSaverActive() {
         try {
             return this._powerProfilesProxy?.ActiveProfile === 'power-saver';
-        } catch (e) {
-            console.error('WACK Shell: Failed to read Power Saver state', e);
+        } catch {
             return false;
         }
     }
@@ -606,8 +698,7 @@ export default class WackShellExtension extends Extension {
             this._windowSnapshotCachingEnabled = this._isLockscreenCupertinoMode() &&
                 this._isLockscreenUnlockFadeEnabled() &&
                 !this._isPowerSaverActive();
-        } catch (e) {
-            console.error('WACK Shell: Failed to sync window snapshot gating', e);
+        } catch {
             this._windowSnapshotCachingEnabled = true;
         }
     }
@@ -631,7 +722,8 @@ export default class WackShellExtension extends Extension {
     _initProximity() {
         this._proximityWindowSignals = new Map();
         this._themeContext = St.ThemeContext.get_for_stage(global.stage);
-        this._customCssPath = GLib.build_filenamev([this.path, 'stylesheet-custom.css']);
+        const cacheDir = GLib.get_user_cache_dir();
+        this._customCssPath = GLib.build_filenamev([cacheDir, 'wack-shell-custom.css']);
         this._customCssFile = Gio.File.new_for_path(this._customCssPath);
         this._desktopSettings = new Gio.Settings({ schema: "org.gnome.desktop.interface" });
         this._proximityRequestToken = 0;
@@ -658,6 +750,11 @@ export default class WackShellExtension extends Extension {
         const enabled = this._settings.get_boolean('enable-panel-proximity');
 
         this._destroyProximityTracking();
+
+        if (this._queuedUpdateId) {
+            GLib.source_remove(this._queuedUpdateId);
+            this._queuedUpdateId = null;
+        }
 
         if (enabled) {
             this._updateProximityStylesheet();
@@ -724,7 +821,11 @@ export default class WackShellExtension extends Extension {
     _onProximityWindowActorRemoved(container, meta_window_actor) {
         const signals = this._proximityWindowSignals.get(meta_window_actor);
         if (signals) {
-            signals.forEach(sig => sig.object.disconnect(sig.id));
+            signals.forEach(sig => {
+                try {
+                    sig.object.disconnect(sig.id);
+                } catch { }
+            });
             this._proximityWindowSignals.delete(meta_window_actor);
         }
         this._queueUpdatePanelVisibility();
@@ -738,7 +839,11 @@ export default class WackShellExtension extends Extension {
 
         if (this._proximityWindowSignals) {
             for (const [, signals] of this._proximityWindowSignals) {
-                signals.forEach(sig => sig.object.disconnect(sig.id));
+                signals.forEach(sig => {
+                    try {
+                        sig.object.disconnect(sig.id);
+                    } catch { }
+                });
             }
             this._proximityWindowSignals.clear();
         }
@@ -747,7 +852,7 @@ export default class WackShellExtension extends Extension {
     _unloadProximityStylesheet() {
         try {
             this._themeContext.get_theme().unload_stylesheet(this._customCssFile);
-        } catch (e) { }
+        } catch { }
         this._themeId = false;
     }
 
@@ -773,6 +878,9 @@ export default class WackShellExtension extends Extension {
 
         const bgCss = bg.replace(/'/g, '');
         const fgCss = fg.replace(/'/g, '');
+
+        global.wack_proximity_bg = bgCss;
+        global.wack_proximity_fg = fgCss;
 
         const cssString = `
 #panel.panel-proximity {
@@ -813,9 +921,7 @@ export default class WackShellExtension extends Extension {
             (file, res) => {
                 try {
                     file.replace_contents_finish(res);
-                } catch (e) {
-                    if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
-                        console.error('wack-shell-proximity: Error writing custom stylesheet', e);
+                } catch {
                     return;
                 }
 
@@ -832,11 +938,10 @@ export default class WackShellExtension extends Extension {
     }
 
     _queueUpdatePanelVisibility() {
-        if (this._queuedUpdateId) {
-            GLib.source_remove(this._queuedUpdateId);
-            this._queuedUpdateId = null;
-        }
-        this._queuedUpdateId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+        if (this._queuedUpdateId)
+            return;
+
+        this._queuedUpdateId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
             this._queuedUpdateId = null;
             this._updatePanelVisibility();
             return GLib.SOURCE_REMOVE;
@@ -856,6 +961,8 @@ export default class WackShellExtension extends Extension {
         }
 
         if (!this._settings.get_boolean('enable-panel-proximity')) {
+            this.lastPanelStateIsProximity = false;
+            global.wack_proximity_active = false;
             this._clearPanelStyle();
             return;
         }
@@ -893,8 +1000,12 @@ export default class WackShellExtension extends Extension {
         });
 
         if (windowNearPanel) {
+            this.lastPanelStateIsProximity = true;
+            global.wack_proximity_active = true;
             this._applyPanelStyle();
         } else {
+            this.lastPanelStateIsProximity = false;
+            global.wack_proximity_active = false;
             this._clearPanelStyle();
         }
     }
@@ -908,6 +1019,20 @@ export default class WackShellExtension extends Extension {
         }
 
         Main.panel.set_style(null);
+
+        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog';
+        const isShieldActive = Main.screenShield && (Main.screenShield.active || Main.screenShield.locked);
+        const isOverview = Main.overview.visible || Main.overview.visibleTarget;
+
+        if (!isLockscreen && !isShieldActive && !isOverview) {
+            global.wack_panel_cached_classes = Main.panel.get_style_class_name() || '';
+            global.wack_panel_cached_style = '';
+            const isDark = this._isProximityDarkMode();
+            const bg = this._settings.get_string(isDark ? 'dark-bg-color' : 'light-bg-color');
+            const fg = this._settings.get_string(isDark ? 'dark-fg-color' : 'light-fg-color');
+            global.wack_panel_cached_proximity_bg = bg.replace(/'/g, '');
+            global.wack_panel_cached_proximity_fg = fg.replace(/'/g, '');
+        }
     }
 
     _clearPanelStyle() {

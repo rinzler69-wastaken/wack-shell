@@ -91,7 +91,7 @@ export default class VibrancyManager {
                     this._syncVibrancy();
                 }
             }, this);
-        } catch (e) {
+        } catch {
             // extensionManager may not support connectObject in all versions
         }
 
@@ -157,9 +157,8 @@ export default class VibrancyManager {
             this._currentColors = colors;
             this._retryCount = 0;
             this.applyVibrancyStyle();
-        } catch (e) {
+        } catch {
             if (runId === this._updateColorsId) {
-                console.error('WACK Shell: Failed to update wallpaper colors', e);
                 this._currentColors = null;
                 this.applyVibrancyStyle();
 
@@ -499,6 +498,20 @@ export default class VibrancyManager {
         }
 
         this._vibrancyStyleActive = true;
+
+        const isLockMode = Main.sessionMode.currentMode === 'unlock-dialog';
+        const isShieldActive = Main.screenShield && (Main.screenShield.active || Main.screenShield.locked);
+        const isOverviewActive = Main.overview.visible || Main.overview.visibleTarget;
+
+        if (!isLockMode && !isShieldActive && !isOverviewActive) {
+            global.wack_panel_cached_classes = Main.panel.get_style_class_name() || '';
+            global.wack_panel_cached_style = Main.panel.style || '';
+            global.wack_panel_cached_proximity_bg = null;
+            global.wack_panel_cached_proximity_fg = null;
+            global.wack_panel_cached_foreground = Main.panel.has_style_class_name('light-contrast') ? 'rgb(20, 20, 20)' : null;
+            global.wack_panel_cached_blur_mode = resolvedBlurMode;
+            global.wack_panel_cached_brightness = brightness;
+        }
     }
 
     _isDarkColorScheme() {

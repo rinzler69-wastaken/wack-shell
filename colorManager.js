@@ -305,8 +305,8 @@ export async function getPanelColors() {
                         const stream = file.read_finish(readRes);
                         GdkPixbuf.Pixbuf.new_from_stream_at_scale_async(
                             stream,
-                            160,
-                            160,
+                            24,
+                            24,
                             true,
                             null,
                             (streamObj, pixRes) => {
