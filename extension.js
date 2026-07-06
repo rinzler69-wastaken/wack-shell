@@ -30,7 +30,7 @@ const PowerProfilesProxy = Gio.DBusProxy.makeProxyWrapper(PowerProfilesIface);
 
 export default class WackShellExtension extends Extension {
     enable() {
-        log('[WACK Shell] enable() called');
+        console.debug('[WACK Shell] enable() called');
         this._settings = this.getSettings();
 
         // Hide native activities button and suppress it from showing up
@@ -93,7 +93,7 @@ export default class WackShellExtension extends Extension {
                 }
             }
         } catch (e) {
-            logError(e, 'WACK Shell: Failed to load wack-lockscreen-clock settings');
+            console.error('WACK Shell: Failed to load wack-lockscreen-clock settings', e);
         }
 
         this._powerProfilesProxy = null;
@@ -104,7 +104,7 @@ export default class WackShellExtension extends Extension {
                 '/net/hadess/PowerProfiles',
                 (_proxy, error) => {
                     if (error) {
-                        logError(error, 'WACK Shell: PowerProfiles proxy error');
+                        console.error('WACK Shell: PowerProfiles proxy error', error);
                         this._syncWindowSnapshotCaching();
                         return;
                     }
@@ -115,7 +115,7 @@ export default class WackShellExtension extends Extension {
                 }
             );
         } catch (e) {
-            logError(e, 'WACK Shell: Failed to initialize PowerProfiles proxy');
+            console.error('WACK Shell: Failed to initialize PowerProfiles proxy', e);
         }
 
         this._syncWindowSnapshotCaching();
@@ -127,7 +127,7 @@ export default class WackShellExtension extends Extension {
     disable() {
         // NOTE: This extension supports 'unlock-dialog' session mode to preserve window snapshots
         // and avoid resource tear-down overhead during Sonoma Lockscreen's unlock crossfade transition.
-        log('[WACK Shell] disable() called');
+        console.debug('[WACK Shell] disable() called');
         this._activities?.container?.disconnectObject(this);
         this._activities = null;
 
@@ -255,7 +255,7 @@ export default class WackShellExtension extends Extension {
         const opacity = isLocked ? 0 : 255;
         const visible = !isLocked;
 
-        log(`[WACK Shell] _syncSessionModeUI called. currentMode=${currentMode}, isUnlockDialog=${isUnlockDialog}, hasWindows=${hasWindows}, isLocked=${isLocked}, visible=${visible}`);
+        console.debug(`[WACK Shell] _syncSessionModeUI called. currentMode=${currentMode}, isUnlockDialog=${isUnlockDialog}, hasWindows=${hasWindows}, isLocked=${isLocked}, visible=${visible}`);
 
         if (this._logoButton) {
             this._logoButton.opacity = opacity;
@@ -325,9 +325,9 @@ export default class WackShellExtension extends Extension {
         if (hasWindows && this._lastHasWindows === false) {
             this._resetWindowsOpacity();
             if (Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode()) {
-                log(`[WACK Shell] _syncSessionModeUI: preserving wack_window_snapshots during Cupertino unlock handoff (${global.wack_window_snapshots?.length ?? 0} cached)`);
+                console.debug(`[WACK Shell] _syncSessionModeUI: preserving wack_window_snapshots during Cupertino unlock handoff (${global.wack_window_snapshots?.length ?? 0} cached)`);
             } else {
-                log(`[WACK Shell] _syncSessionModeUI: hasWindows flipped true, clearing wack_window_snapshots (was ${global.wack_window_snapshots?.length ?? 0})`);
+                console.debug(`[WACK Shell] _syncSessionModeUI: hasWindows flipped true, clearing wack_window_snapshots (was ${global.wack_window_snapshots?.length ?? 0})`);
                 global.wack_window_snapshots = [];
             }
         }
@@ -442,7 +442,7 @@ export default class WackShellExtension extends Extension {
 
         const controls = Main.overview._overview?._controls;
         if (!controls || !controls.layout_manager) {
-            logError(new Error('WACK Shell: Main.overview._overview._controls.layout_manager is not initialized'));
+            console.error('WACK Shell: Main.overview._overview._controls.layout_manager is not initialized');
             return;
         }
 
@@ -592,7 +592,7 @@ export default class WackShellExtension extends Extension {
         try {
             return this._powerProfilesProxy?.ActiveProfile === 'power-saver';
         } catch (e) {
-            logError(e, 'WACK Shell: Failed to read Power Saver state');
+            console.error('WACK Shell: Failed to read Power Saver state', e);
             return false;
         }
     }
@@ -607,7 +607,7 @@ export default class WackShellExtension extends Extension {
                 this._isLockscreenUnlockFadeEnabled() &&
                 !this._isPowerSaverActive();
         } catch (e) {
-            logError(e, 'WACK Shell: Failed to sync window snapshot gating');
+            console.error('WACK Shell: Failed to sync window snapshot gating', e);
             this._windowSnapshotCachingEnabled = true;
         }
     }
@@ -815,7 +815,7 @@ export default class WackShellExtension extends Extension {
                     file.replace_contents_finish(res);
                 } catch (e) {
                     if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
-                        logError(e, 'wack-shell-proximity: Error writing custom stylesheet');
+                        console.error('wack-shell-proximity: Error writing custom stylesheet', e);
                     return;
                 }
 

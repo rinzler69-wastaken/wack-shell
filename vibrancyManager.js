@@ -38,11 +38,7 @@ export default class VibrancyManager {
         this._retryCount = 0;
         this._retryTimeoutId = 0;
 
-        try {
-            this._desktopSettings = new Gio.Settings({ schema: 'org.gnome.desktop.interface' });
-        } catch (e) {
-            this._desktopSettings = null;
-        }
+        this._desktopSettings = new Gio.Settings({ schema: 'org.gnome.desktop.interface' });
 
         this._bgSettings.connectObject(
             'changed::picture-uri', () => this._updateWallpaperColors(),
@@ -163,7 +159,7 @@ export default class VibrancyManager {
             this.applyVibrancyStyle();
         } catch (e) {
             if (runId === this._updateColorsId) {
-                logError(e, 'WACK Shell: Failed to update wallpaper colors');
+                console.error('WACK Shell: Failed to update wallpaper colors', e);
                 this._currentColors = null;
                 this.applyVibrancyStyle();
 

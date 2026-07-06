@@ -359,7 +359,7 @@ export const WackLogoButton = GObject.registerClass(
             try {
                 this.icon.gicon = Gio.icon_new_for_string(logoPath);
             } catch (e) {
-                logError(e, 'WACK Shell: Failed to load icon');
+                console.error('WACK Shell: Failed to load icon', e);
                 this.icon.icon_name = 'start-here-symbolic';
             }
         }
@@ -397,7 +397,7 @@ export const WackLogoButton = GObject.registerClass(
                         Util.trySpawnCommandLine(found);
                         return;
                     } catch (e) {
-                        logError(e, 'Failed to launch aboutpane');
+                        console.error('Failed to launch aboutpane', e);
                     }
                 }
                 const gnomeMajorVersion = parseInt(Config.PACKAGE_VERSION.toString().split('.')[0]);
@@ -445,7 +445,7 @@ export const WackLogoButton = GObject.registerClass(
                     try {
                         extensionApp.launch(0, -1, Shell.AppLaunchGpu.APP_PREF);
                     } catch (e) {
-                        logError(e);
+                        console.error(e);
                     }
                 }
             }));

@@ -64,12 +64,12 @@ function saveCache() {
                 try {
                     file.replace_contents_finish(res);
                 } catch (e) {
-                    logError(e, 'WACK Shell/ColorManager: Failed to save persistent cache');
+                    console.error('WACK Shell/ColorManager: Failed to save persistent cache', e);
                 }
             }
         );
     } catch (e) {
-        logError(e, 'WACK Shell/ColorManager: Failed to save persistent cache');
+        console.error('WACK Shell/ColorManager: Failed to save persistent cache', e);
     }
 }
 
@@ -148,7 +148,7 @@ function resolveSlideshowXml(xmlPath) {
                     return;
                 }
             } catch (e) {
-                logError(e, 'WACK Shell/ColorManager: Failed to resolve XML slideshow');
+                console.error('WACK Shell/ColorManager: Failed to resolve XML slideshow', e);
             }
             resolve(null);
         });
@@ -390,7 +390,7 @@ export async function getPanelColors() {
             overallChroma = (maxVal - minVal) / 255.0;
 
         } catch (e) {
-            logError(e, 'WACK Shell/ColorManager: Failed to extract colors from wallpaper');
+            console.error('WACK Shell/ColorManager: Failed to extract colors from wallpaper', e);
             throw e;
         }
     }
@@ -561,4 +561,10 @@ export function releaseCache() {
     // Nothing to free — the _cache Map entries are plain JS objects (no GPU
     // textures), and keeping them avoids re-decoding the wallpaper on every
     // lock/unlock cycle. clearCache() remains available for hard resets.
+    if (_bgSettings) {
+        _bgSettings = null;
+    }
+    if (_interfaceSettings) {
+        _interfaceSettings = null;
+    }
 }

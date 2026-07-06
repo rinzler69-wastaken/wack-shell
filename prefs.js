@@ -66,17 +66,6 @@ export default class WackShellPreferences extends ExtensionPreferences {
         homeBox.append(descriptionLabel);
 
         let versionName = this.metadata['version-name'] || this.metadata.version || '';
-        if (!versionName && this.dir) {
-            try {
-                const file = this.dir.get_child('metadata.json');
-                const [, contents] = file.load_contents(null);
-                const decoder = new TextDecoder('utf-8');
-                const parsedMetadata = JSON.parse(decoder.decode(contents));
-                versionName = parsedMetadata['version-name'] || parsedMetadata.version || '';
-            } catch (e) {
-                console.error('Failed to parse metadata.json:', e);
-            }
-        }
 
         versionName = String(versionName);
 
