@@ -30,16 +30,18 @@ const PowerProfilesProxy = Gio.DBusProxy.makeProxyWrapper(PowerProfilesIface);
 
 export default class WackShellExtension extends Extension {
     enable() {
+        log('[WACK Shell] enable() called');
         this._settings = this.getSettings();
 
         // Hide native activities button and suppress it from showing up
         const activities = Main.panel.statusArea['activities'];
         if (activities?.container) {
             activities.container.hide();
-            this._activitiesShowId = activities.container.connect('show', () => {
+            activities.container.connectObject('show', () => {
                 activities.container.hide();
-            });
+            }, this);
         }
+        this._activities = activities;
 
         this._logoButton = null;
         this._workspaceButton = null;
@@ -47,7 +49,8 @@ export default class WackShellExtension extends Extension {
 
         this._lastHasWindows = Main.sessionMode.hasWindows;
 
-        this._sessionUpdatedId = Main.sessionMode.connect('updated', () => this._syncSessionModeUI());
+        this._sessionModeOwner = {};
+        Main.sessionMode.connectObject('updated', () => this._syncSessionModeUI(), this._sessionModeOwner);
 
         this._settings.connectObject(
             'changed::show-logo-menu', () => this._syncLogoMenu(),
@@ -62,20 +65,35 @@ export default class WackShellExtension extends Extension {
         this._initProximity();
 
         // Initialize and enable VibrancyManager
-        this._vibrancyManager = new VibrancyManager(this);
+        this._vibrancyManager = new VibrancyManager(this, this._settings);
         this._vibrancyManager.enable();
 
         this._windowSnapshotCachingEnabled = true;
+        this._lockscreenSettings = null;
 
         try {
-            this._lockscreenSettings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.wack-lockscreen-clock' });
-            this._lockscreenSettings.connectObject(
-                'changed::lockscreen-mode', () => this._syncWindowSnapshotCaching(),
-                'changed::cupertino-unlock-fade', () => this._syncWindowSnapshotCaching(),
-                this
-            );
-        } catch {
-            this._lockscreenSettings = null;
+            const lockExt = Main.extensionManager.lookup('wack-lockscreen-clock@rinzler69-wastaken.github.com');
+            if (lockExt && lockExt.state === 1 /* ExtensionState.ENABLED */) {
+                const schemaDir = lockExt.dir.get_child('schemas');
+                if (schemaDir.query_exists(null)) {
+                    const source = Gio.SettingsSchemaSource.new_from_directory(
+                        schemaDir.get_path(),
+                        Gio.SettingsSchemaSource.get_default(),
+                        false
+                    );
+                    const schema = source.lookup('org.gnome.shell.extensions.wack-lockscreen-clock', true);
+                    if (schema) {
+                        this._lockscreenSettings = new Gio.Settings({ settings_schema: schema });
+                        this._lockscreenSettings.connectObject(
+                            'changed::lockscreen-mode', () => this._syncWindowSnapshotCaching(),
+                            'changed::cupertino-unlock-fade', () => this._syncWindowSnapshotCaching(),
+                            this
+                        );
+                    }
+                }
+            }
+        } catch (e) {
+            logError(e, 'WACK Shell: Failed to load wack-lockscreen-clock settings');
         }
 
         this._powerProfilesProxy = null;
@@ -107,14 +125,13 @@ export default class WackShellExtension extends Extension {
     }
 
     disable() {
-        if (this._activitiesShowId) {
-            Main.panel.statusArea['activities']?.container.disconnect(this._activitiesShowId);
-            this._activitiesShowId = null;
-        }
+        log('[WACK Shell] disable() called');
+        this._activities?.container?.disconnectObject(this);
+        this._activities = null;
 
-        if (this._sessionUpdatedId) {
-            Main.sessionMode.disconnect(this._sessionUpdatedId);
-            this._sessionUpdatedId = null;
+        if (this._sessionModeOwner) {
+            Main.sessionMode.disconnectObject(this._sessionModeOwner);
+            this._sessionModeOwner = null;
         }
 
         if (this._proximityWriteCancellable) {
@@ -143,6 +160,9 @@ export default class WackShellExtension extends Extension {
 
         this._settings.disconnectObject(this);
         this._settings = null;
+
+        this._desktopSettings?.disconnectObject(this);
+        this._desktopSettings = null;
 
         if (this._logoButton) {
             this._logoButton.destroy();
@@ -226,34 +246,82 @@ export default class WackShellExtension extends Extension {
     }
 
     _syncSessionModeUI() {
+        const currentMode = Main.sessionMode.currentMode;
+        const isUnlockDialog = currentMode === 'unlock-dialog' || currentMode === 'greeter' || currentMode === 'gdm';
         const hasWindows = Main.sessionMode.hasWindows;
         const isLocked = !hasWindows;
         const opacity = isLocked ? 0 : 255;
-        const reactive = !isLocked;
+        const visible = !isLocked;
+
+        log(`[WACK Shell] _syncSessionModeUI called. currentMode=${currentMode}, isUnlockDialog=${isUnlockDialog}, hasWindows=${hasWindows}, isLocked=${isLocked}, visible=${visible}`);
 
         if (this._logoButton) {
             this._logoButton.opacity = opacity;
-            this._logoButton.reactive = reactive;
-            this._logoButton.can_focus = reactive;
+            this._logoButton.reactive = visible;
+            this._logoButton.can_focus = visible;
+            if (visible) {
+                this._logoButton.show();
+            } else {
+                this._logoButton.hide();
+            }
+
+            if (this._logoButton.container) {
+                this._logoButton.container.opacity = opacity;
+                this._logoButton.container.reactive = visible;
+                this._logoButton.container.can_focus = visible;
+                if (visible) {
+                    this._logoButton.container.show();
+                } else {
+                    this._logoButton.container.hide();
+                }
+            }
         }
         if (this._workspaceButton) {
             this._workspaceButton.opacity = opacity;
-            this._workspaceButton.reactive = reactive;
-            this._workspaceButton.can_focus = reactive;
+            this._workspaceButton.reactive = visible;
+            this._workspaceButton.can_focus = visible;
+            if (visible) {
+                this._workspaceButton.show();
+            } else {
+                this._workspaceButton.hide();
+            }
+
+            if (this._workspaceButton.container) {
+                this._workspaceButton.container.opacity = opacity;
+                this._workspaceButton.container.reactive = visible;
+                this._workspaceButton.container.can_focus = visible;
+                if (visible) {
+                    this._workspaceButton.container.show();
+                } else {
+                    this._workspaceButton.container.hide();
+                }
+            }
         }
         if (this._appMenuButton) {
             this._appMenuButton.opacity = opacity;
-            this._appMenuButton.reactive = reactive;
-            this._appMenuButton.can_focus = reactive;
+            this._appMenuButton.reactive = visible;
+            this._appMenuButton.can_focus = visible;
+            if (visible) {
+                this._appMenuButton.show();
+            } else {
+                this._appMenuButton.hide();
+            }
+
+            if (this._appMenuButton.container) {
+                this._appMenuButton.container.opacity = opacity;
+                this._appMenuButton.container.reactive = visible;
+                this._appMenuButton.container.can_focus = visible;
+                if (visible) {
+                    this._appMenuButton.container.show();
+                } else {
+                    this._appMenuButton.container.hide();
+                }
+            }
         }
 
-        // Trigger window entrance animation when transitioning from locked to unlocked
+        // Ensure windows are reset to full opacity and scale when transitioning from locked to unlocked
         if (hasWindows && this._lastHasWindows === false) {
-            if (this._isLockscreenCupertinoMode()) {
-                this._resetWindowsOpacity();
-            } else {
-                this._animateWindowsIn();
-            }
+            this._resetWindowsOpacity();
             if (Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode()) {
                 log(`[WACK Shell] _syncSessionModeUI: preserving wack_window_snapshots during Cupertino unlock handoff (${global.wack_window_snapshots?.length ?? 0} cached)`);
             } else {
@@ -265,58 +333,6 @@ export default class WackShellExtension extends Extension {
         this._lastHasWindows = hasWindows;
     }
 
-    _animateWindowsIn() {
-        const workspace = global.workspace_manager.get_active_workspace();
-        const windows = workspace.list_windows().filter(metaWindow => {
-            return !metaWindow.is_hidden() &&
-                metaWindow.get_window_type() !== Meta.WindowType.DESKTOP &&
-                !metaWindow.is_attached_dialog() &&
-                !metaWindow.maximized_horizontally &&
-                !metaWindow.maximized_vertically;
-        });
-        const windowActors = windows.map(w => w.get_compositor_private()).filter(actor => actor !== null);
-
-        windowActors.forEach(actor => {
-            actor.remove_all_transitions();
-
-            const isDialog = actor.meta_window.get_window_type() === Meta.WindowType.DIALOG ||
-                actor.meta_window.get_window_type() === Meta.WindowType.MODAL_DIALOG;
-
-            if (isDialog) {
-                actor.set_pivot_point(0.5, 0.5);
-                actor.scale_x = 1.0;
-                actor.scale_y = 0.01;
-                actor.opacity = 0;
-
-                actor.ease({
-                    opacity: 255,
-                    scale_y: 1.0,
-                    duration: 150,
-                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                    onComplete: () => {
-                        actor.set_pivot_point(0.0, 0.0);
-                    }
-                });
-            } else {
-                actor.set_pivot_point(0.5, 1.0);
-                actor.scale_x = 0.01;
-                actor.scale_y = 0.05;
-                actor.opacity = 0;
-
-                actor.ease({
-                    opacity: 255,
-                    scale_x: 1.0,
-                    scale_y: 1.0,
-                    duration: 250,
-                    mode: Clutter.AnimationMode.EASE_OUT_EXPO,
-                    onComplete: () => {
-                        actor.set_pivot_point(0.0, 0.0);
-                    }
-                });
-            }
-        });
-    }
-
     _setupWindowCache() {
         global.wack_window_snapshots = [];
 
@@ -324,20 +340,25 @@ export default class WackShellExtension extends Extension {
         if (shield) {
             this._origShieldActivate = shield.activate.bind(shield);
             shield.activate = (animate) => {
-                if (this._windowSnapshotCachingEnabled) {
-                    log('[WACK Shell] shield.activate intercepted, caching window textures');
+                if (this._windowSnapshotCachingEnabled)
                     this._cacheWindowTextures();
-                } else {
-                    log('[WACK Shell] shield.activate intercepted, skipping window texture cache');
-                    global.wack_window_snapshots = [];
-                }
+                else
+                    this._clearWindowSnapshots();
                 return this._origShieldActivate(animate);
             };
         }
     }
 
-    _cacheWindowTextures() {
+    _clearWindowSnapshots() {
+        if (global.wack_window_snapshots) {
+            for (const snap of global.wack_window_snapshots)
+                snap.content = null;
+        }
         global.wack_window_snapshots = [];
+    }
+
+    _cacheWindowTextures() {
+        this._clearWindowSnapshots();
         const workspace = global.workspace_manager.get_active_workspace();
         const actors = global.get_window_actors().filter(actor => {
             const win = actor.metaWindow;
@@ -348,17 +369,14 @@ export default class WackShellExtension extends Extension {
                 !win.is_hidden();
         });
 
-        log(`[WACK Shell] _cacheWindowTextures: ${actors.length} candidate window actor(s) found`);
-
         actors.forEach(actor => {
             const win = actor.metaWindow;
             if (!win) return;
             const bufferRect = win.get_buffer_rect();
             const content = actor.paint_to_content(null);
-            const title = win.get_title?.() ?? '(no title)';
             if (content) {
                 global.wack_window_snapshots.push({
-                    content: content,
+                    content,
                     rect: {
                         x: bufferRect.x,
                         y: bufferRect.y,
@@ -366,13 +384,8 @@ export default class WackShellExtension extends Extension {
                         height: bufferRect.height
                     }
                 });
-                log(`[WACK Shell] cached "${title}" bufferRect=${bufferRect.x},${bufferRect.y} ${bufferRect.width}x${bufferRect.height}`);
-            } else {
-                log(`[WACK Shell] paint_to_content returned null/falsy for "${title}" — SKIPPED`);
             }
         });
-
-        log(`[WACK Shell] _cacheWindowTextures: total cached = ${global.wack_window_snapshots.length}`);
     }
 
     _destroyWindowCache() {
@@ -380,7 +393,7 @@ export default class WackShellExtension extends Extension {
             Main.screenShield.activate = this._origShieldActivate;
             this._origShieldActivate = null;
         }
-        global.wack_window_snapshots = [];
+        this._clearWindowSnapshots();
     }
 
     _initWorkspacesAppGrid() {
@@ -595,7 +608,6 @@ export default class WackShellExtension extends Extension {
     }
 
     _initProximity() {
-        this._proximitySignals = [];
         this._proximityWindowSignals = new Map();
         this._themeContext = St.ThemeContext.get_for_stage(global.stage);
         this._customCssPath = GLib.build_filenamev([this.path, 'stylesheet-custom.css']);
@@ -640,22 +652,28 @@ export default class WackShellExtension extends Extension {
             this._onProximityWindowActorAdded(meta_window_actor.get_parent(), meta_window_actor);
         }
 
-        const sigChildAdded = global.window_group.connect('child-added', this._onProximityWindowActorAdded.bind(this));
-        const sigChildRemoved = global.window_group.connect('child-removed', this._onProximityWindowActorRemoved.bind(this));
-        this._proximitySignals.push({ object: global.window_group, id: sigChildAdded });
-        this._proximitySignals.push({ object: global.window_group, id: sigChildRemoved });
+        global.window_group.connectObject(
+            'child-added', this._onProximityWindowActorAdded.bind(this),
+            'child-removed', this._onProximityWindowActorRemoved.bind(this),
+            this
+        );
 
-        const sigSwitchWS = global.window_manager.connect('switch-workspace', () => this._queueUpdatePanelVisibility());
-        this._proximitySignals.push({ object: global.window_manager, id: sigSwitchWS });
+        global.window_manager.connectObject(
+            'switch-workspace', () => this._queueUpdatePanelVisibility(),
+            this
+        );
 
-        const sigShowing = Main.overview.connect('showing', () => this._updatePanelVisibility());
-        const sigHiding = Main.overview.connect('hiding', () => this._updatePanelVisibility());
-        const sigHidden = Main.overview.connect('hidden', () => this._updatePanelVisibility());
-        const sigSession = Main.sessionMode.connect('updated', () => this._updatePanelVisibility());
-        this._proximitySignals.push({ object: Main.overview, id: sigShowing });
-        this._proximitySignals.push({ object: Main.overview, id: sigHiding });
-        this._proximitySignals.push({ object: Main.overview, id: sigHidden });
-        this._proximitySignals.push({ object: Main.sessionMode, id: sigSession });
+        Main.overview.connectObject(
+            'showing', () => this._updatePanelVisibility(),
+            'hiding', () => this._updatePanelVisibility(),
+            'hidden', () => this._updatePanelVisibility(),
+            this
+        );
+
+        Main.sessionMode.connectObject(
+            'updated', () => this._updatePanelVisibility(),
+            this
+        );
 
         this._queueUpdatePanelVisibility();
     }
@@ -692,13 +710,13 @@ export default class WackShellExtension extends Extension {
     }
 
     _destroyProximityTracking() {
-        if (this._proximitySignals) {
-            this._proximitySignals.forEach(s => s.object.disconnect(s.id));
-            this._proximitySignals = [];
-        }
+        global.window_group.disconnectObject(this);
+        global.window_manager.disconnectObject(this);
+        Main.overview.disconnectObject(this);
+        Main.sessionMode.disconnectObject(this);
 
         if (this._proximityWindowSignals) {
-            for (const [win, signals] of this._proximityWindowSignals) {
+            for (const [, signals] of this._proximityWindowSignals) {
                 signals.forEach(sig => sig.object.disconnect(sig.id));
             }
             this._proximityWindowSignals.clear();

@@ -103,13 +103,6 @@ export default class WackShellPreferences extends ExtensionPreferences {
             subtitle: this.metadata.url ? this.metadata.url.replace('https://', '') : 'github.com/rinzler69-wastaken/wack-shell',
         });
 
-        const githubIcon = new Gtk.Image({
-            icon_name: 'system-software-install-symbolic',
-            pixel_size: 32,
-            valign: Gtk.Align.CENTER,
-        });
-        repoRow.add_prefix(githubIcon);
-
         const openBtn = new Gtk.Button({
             icon_name: 'adw-external-link-symbolic',
             tooltip_text: 'Open on GitHub',
@@ -173,12 +166,6 @@ export default class WackShellPreferences extends ExtensionPreferences {
             title: 'Saweria',
             subtitle: donations.custom.replace('https://', ''),
         });
-        const saweriaIcon = new Gtk.Image({
-            icon_name: 'emblem-favorite-symbolic',
-            pixel_size: 32,
-            valign: Gtk.Align.CENTER,
-        });
-        saweriaRow.add_prefix(saweriaIcon);
         const saweriaBtn = new Gtk.Button({
             icon_name: 'adw-external-link-symbolic',
             tooltip_text: 'Open Saweria',
@@ -537,34 +524,28 @@ export default class WackShellPreferences extends ExtensionPreferences {
         const initBmsSettings = () => {
             if (bmsSettings) return;
             try {
-                bmsSettings = new Gio.Settings({
-                    schema: 'org.gnome.shell.extensions.blur-my-shell.panel',
-                });
-            } catch (e) {
-                try {
-                    const paths = [
-                        GLib.get_home_dir() + '/.local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas',
-                        '/usr/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas',
-                        '/usr/local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas'
-                    ];
-                    for (const path of paths) {
-                        const file = Gio.File.new_for_path(path);
-                        if (file.query_exists(null)) {
-                            const source = Gio.SettingsSchemaSource.new_from_directory(
-                                path,
-                                Gio.SettingsSchemaSource.get_default(),
-                                false
-                            );
-                            const schema = source.lookup('org.gnome.shell.extensions.blur-my-shell.panel', true);
-                            if (schema) {
-                                bmsSettings = new Gio.Settings({ settings_schema: schema });
-                                break;
-                            }
+                const bmsPaths = [
+                    `${GLib.get_home_dir()}/.local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas`,
+                    '/usr/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas',
+                    '/usr/local/share/gnome-shell/extensions/blur-my-shell@aunetx/schemas',
+                ];
+                for (const path of bmsPaths) {
+                    const file = Gio.File.new_for_path(path);
+                    if (file.query_exists(null)) {
+                        const source = Gio.SettingsSchemaSource.new_from_directory(
+                            path,
+                            Gio.SettingsSchemaSource.get_default(),
+                            false
+                        );
+                        const schema = source.lookup('org.gnome.shell.extensions.blur-my-shell.panel', true);
+                        if (schema) {
+                            bmsSettings = new Gio.Settings({ settings_schema: schema });
+                            break;
                         }
                     }
-                } catch (err) {
-                    bmsSettings = null;
                 }
+            } catch (e) {
+                bmsSettings = null;
             }
 
             if (bmsSettings && !bmsBlurSig) {

@@ -9,16 +9,14 @@ import * as ColorManager from './colorManager.js';
 import { PanelBlur, RADIUS_LINEAR, RADIUS_LENIENT } from './panelBlur.js';
 
 export default class VibrancyManager {
-    constructor(extension) {
+    constructor(extension, settings) {
         this._extension = extension;
-        this._settings = extension.getSettings();
+        this._settings = settings;
         this._desktopSettings = null;
         this._bgSettings = null;
         this._bmsSettings = null;
-        this._panelBlur = null;
         this._vibrancyBmsSig = null;
-        this._extStateChangedId = 0;
-        this._colorTrackerSignals = null;
+        this._panelBlur = null;
         this._settingStyle = false;
         this._updateColorsId = 0;
         this._retryCount = 0;
@@ -35,7 +33,6 @@ export default class VibrancyManager {
 
     enable() {
         this._bgSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
-        this._colorTrackerSignals = [];
         this._settingStyle = false;
         this._updateColorsId = 0;
         this._retryCount = 0;
@@ -46,12 +43,6 @@ export default class VibrancyManager {
         } catch (e) {
             this._desktopSettings = null;
         }
-
-        this._settings.connectObject(
-            'changed::vibrancy-blur-mode', () => this._syncVibrancy(),
-            'changed::vibrancy-style', () => this._syncVibrancy(),
-            this
-        );
 
         this._bgSettings.connectObject(
             'changed::picture-uri', () => this._updateWallpaperColors(),
@@ -70,12 +61,10 @@ export default class VibrancyManager {
             );
         }
 
-        const sigStyle = Main.panel.connect('notify::style', () => {
+        Main.panel.connectObject('notify::style', () => {
             if (this._settingStyle) return;
             this.applyVibrancyStyle();
-        });
-
-        this._colorTrackerSignals.push({ object: Main.panel, id: sigStyle });
+        }, this);
 
         // Initialize PanelBlur and BMS integrations
         this._panelBlur = new PanelBlur();
@@ -100,14 +89,14 @@ export default class VibrancyManager {
         this._initBmsSettings();
 
         try {
-            this._extStateChangedId = Main.extensionManager.connect('extension-state-changed', (_obj, ext) => {
+            Main.extensionManager.connectObject('extension-state-changed', (_obj, ext) => {
                 if (ext.uuid === 'blur-my-shell@aunetx') {
                     this._initBmsSettings();
                     this._syncVibrancy();
                 }
-            });
+            }, this);
         } catch (e) {
-            this._extStateChangedId = 0;
+            // extensionManager may not support connectObject in all versions
         }
 
         this._updateWallpaperColors();
@@ -115,20 +104,13 @@ export default class VibrancyManager {
     }
 
     disable() {
-        if (this._proximityWriteCancellable) {
-            this._proximityWriteCancellable.cancel();
-            this._proximityWriteCancellable = null;
-        }
-
         if (this._retryTimeoutId) {
             GLib.source_remove(this._retryTimeoutId);
             this._retryTimeoutId = 0;
         }
 
-        if (this._colorTrackerSignals) {
-            this._colorTrackerSignals.forEach(sig => sig.object.disconnect(sig.id));
-            this._colorTrackerSignals = null;
-        }
+        Main.panel.disconnectObject(this);
+        Main.extensionManager.disconnectObject(this);
 
         if (this._panelBlur) {
             this._panelBlur.disable();
@@ -140,11 +122,6 @@ export default class VibrancyManager {
                 this._bmsSettings.disconnect(this._vibrancyBmsSig);
             this._bmsSettings = null;
             this._vibrancyBmsSig = null;
-        }
-
-        if (this._extStateChangedId) {
-            Main.extensionManager.disconnect(this._extStateChangedId);
-            this._extStateChangedId = 0;
         }
 
         if (this._vibrancyStyleActive) {
@@ -168,7 +145,7 @@ export default class VibrancyManager {
 
         this._settings.disconnectObject(this);
 
-        ColorManager.clearCache();
+        ColorManager.releaseCache();
         this._currentColors = null;
     }
 
@@ -212,27 +189,23 @@ export default class VibrancyManager {
         }
 
         try {
-            this._bmsSettings = new Gio.Settings({ schema: 'org.gnome.shell.extensions.blur-my-shell.panel' });
-        } catch (e) {
-            try {
-                const ext = Main.extensionManager.lookup('blur-my-shell@aunetx');
-                if (ext) {
-                    const schemaDir = ext.dir.get_child('schemas');
-                    if (schemaDir.query_exists(null)) {
-                        const source = Gio.SettingsSchemaSource.new_from_directory(
-                            schemaDir.get_path(),
-                            Gio.SettingsSchemaSource.get_default(),
-                            false
-                        );
-                        const schema = source.lookup('org.gnome.shell.extensions.blur-my-shell.panel', true);
-                        if (schema) {
-                            this._bmsSettings = new Gio.Settings({ settings_schema: schema });
-                        }
+            const ext = Main.extensionManager.lookup('blur-my-shell@aunetx');
+            if (ext) {
+                const schemaDir = ext.dir.get_child('schemas');
+                if (schemaDir.query_exists(null)) {
+                    const source = Gio.SettingsSchemaSource.new_from_directory(
+                        schemaDir.get_path(),
+                        Gio.SettingsSchemaSource.get_default(),
+                        false
+                    );
+                    const schema = source.lookup('org.gnome.shell.extensions.blur-my-shell.panel', true);
+                    if (schema) {
+                        this._bmsSettings = new Gio.Settings({ settings_schema: schema });
                     }
                 }
-            } catch (err) {
-                this._bmsSettings = null;
             }
+        } catch (err) {
+            this._bmsSettings = null;
         }
 
         if (this._bmsSettings) {

@@ -206,8 +206,6 @@ export class PanelBlur {
     }
 
     disable() {
-        if (!this._enabled) return;
-
         if (this._sessionVisibilityTimeoutId) {
             GLib.source_remove(this._sessionVisibilityTimeoutId);
             this._sessionVisibilityTimeoutId = 0;

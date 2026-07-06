@@ -15,6 +15,7 @@ import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import * as Overview from 'resource:///org/gnome/shell/ui/overview.js';
 import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
+import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 
 import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -205,7 +206,7 @@ export const WackLogoButton = GObject.registerClass(
             this.add_style_class_name('wack-logo-button');
 
             this._extension = extension;
-            this._settings = extension.getSettings();
+            this._settings = extension._settings;
 
             // Single box layout
             this._container = new St.BoxLayout({ style_class: 'activities-layout' });
@@ -467,13 +468,13 @@ export const WackLogoButton = GObject.registerClass(
 
                 if (showPower) {
                     this.menu.addMenuItem(new LogoMenuItem(_('Sleep'), () => {
-                        Util.spawn(['systemctl', 'suspend']);
+                        SystemActions.getDefault().activateSuspend();
                     }));
                     this.menu.addMenuItem(new LogoMenuItem(_('Restart...'), () => {
-                        Util.spawn(['gnome-session-quit', '--reboot']);
+                        SystemActions.getDefault().activateRestart();
                     }));
                     this.menu.addMenuItem(new LogoMenuItem(_('Shut Down...'), () => {
-                        Util.spawn(['gnome-session-quit', '--power-off']);
+                        SystemActions.getDefault().activatePowerOff();
                     }));
                 }
 
@@ -482,13 +483,13 @@ export const WackLogoButton = GObject.registerClass(
                         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
                     }
                     this.menu.addMenuItem(new LogoMenuItem(_('Lock Screen'), () => {
-                        Util.spawn(['loginctl', 'lock-session']);
+                        SystemActions.getDefault().activateLockScreen();
                     }));
                 }
 
                 if (showPower) {
                     this.menu.addMenuItem(new LogoMenuItem(_('Log Out...'), () => {
-                        Util.spawn(['gnome-session-quit', '--logout']);
+                        SystemActions.getDefault().activateLogout();
                     }));
                 }
             }
@@ -542,7 +543,8 @@ export const WackAppMenuButton = GObject.registerClass({
         });
         this.add_style_class_name('wack-app-menu-button');
 
-        this._settings = extension.getSettings();
+        this._extension = extension;
+        this._settings = extension._settings;
 
         this._startingApps = [];
         this._menuManager = Main.panel.menuManager;
@@ -677,6 +679,21 @@ export const WackAppMenuButton = GObject.registerClass({
     }
 
     _sync() {
+        const currentMode = Main.sessionMode.currentMode;
+        const isLocked = currentMode === 'unlock-dialog' || currentMode === 'greeter' || currentMode === 'gdm';
+        if (isLocked) {
+            this._visible = false;
+            this.reactive = false;
+            this.opacity = 0;
+            this.hide();
+            if (this.container) {
+                this.container.opacity = 0;
+                this.container.reactive = false;
+                this.container.hide();
+            }
+            return;
+        }
+
         let targetApp = this._findTargetApp();
 
         if (this._targetApp !== targetApp) {
@@ -752,7 +769,7 @@ export const WackWorkspaceButton = GObject.registerClass(
             this.add_style_class_name('wack-workspace-button');
 
             this._extension = extension;
-            this._settings = extension.getSettings();
+            this._settings = extension._settings;
 
             // Single box layout
             this._container = new St.BoxLayout({ style_class: 'activities-layout' });

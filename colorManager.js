@@ -201,13 +201,21 @@ function getOverallAverageColor(pixels, channels, rowstride, visibleX, visibleY,
     };
 }
 
+// Module-level singletons — created once, reused across all calls and cycles.
+let _bgSettings = null;
+let _interfaceSettings = null;
+
 /**
  * Extract panel background colors from the current desktop wallpaper.
  * Samples left-most, right-most, and center-most regions at the top of the wallpaper.
  */
 export async function getPanelColors() {
-    const bgSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
-    const interfaceSettings = new Gio.Settings({ schema: 'org.gnome.desktop.interface' });
+    if (!_bgSettings)
+        _bgSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
+    if (!_interfaceSettings)
+        _interfaceSettings = new Gio.Settings({ schema: 'org.gnome.desktop.interface' });
+    const bgSettings = _bgSettings;
+    const interfaceSettings = _interfaceSettings;
 
     const isDark = interfaceSettings.get_string('color-scheme') === 'prefer-dark';
     const uri = bgSettings.get_string(isDark ? 'picture-uri-dark' : 'picture-uri');
@@ -533,8 +541,24 @@ export async function getPanelColors() {
     return result;
 }
 
+/**
+ * Full cache reset. Only call when the cache is known to be stale
+ * (e.g. schema version mismatch or explicit user request).
+ */
 export function clearCache() {
     _cache.clear();
     _loaded = false;
     _loadPromise = null;
+}
+
+/**
+ * Lightweight release called on extension disable.
+ * Keeps the in-memory cache and disk cache intact so a quick re-enable
+ * (e.g. lock/unlock cycle) doesn't need to re-decode the wallpaper.
+ * The cache Map is module-level and survives disable/enable cycles.
+ */
+export function releaseCache() {
+    // Nothing to free — the _cache Map entries are plain JS objects (no GPU
+    // textures), and keeping them avoids re-decoding the wallpaper on every
+    // lock/unlock cycle. clearCache() remains available for hard resets.
 }
