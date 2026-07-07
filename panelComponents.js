@@ -597,7 +597,7 @@ export const WackAppMenuButton = GObject.registerClass({
             this._updateIconEffect.bind(this), this);
 
         this._updateIconEffect();
-        this._sync();
+        this._sync(true);
     }
 
     fadeIn() {
@@ -607,6 +607,11 @@ export const WackAppMenuButton = GObject.registerClass({
         this._visible = true;
         this.show();
         this.reactive = true;
+        if (this.container) {
+            this.container.opacity = 255;
+            this.container.reactive = true;
+            this.container.show();
+        }
         this.remove_all_transitions();
         this.ease({
             opacity: 255,
@@ -678,9 +683,9 @@ export const WackAppMenuButton = GObject.registerClass({
         return null;
     }
 
-    _sync() {
-        const currentMode = Main.sessionMode.currentMode;
-        const isLocked = currentMode === 'unlock-dialog' || currentMode === 'greeter' || currentMode === 'gdm';
+    _sync(instant = false) {
+        const forceInstant = instant === true;
+        const isLocked = !Main.sessionMode.hasWindows;
         if (isLocked) {
             this._visible = false;
             this.reactive = false;
@@ -709,10 +714,35 @@ export const WackAppMenuButton = GObject.registerClass({
         }
 
         let visible = this._targetApp != null && !Main.overview.visibleTarget;
-        if (visible)
-            this.fadeIn();
-        else
-            this.fadeOut();
+        if (visible) {
+            if (forceInstant) {
+                this._visible = true;
+                this.show();
+                this.reactive = true;
+                this.opacity = 255;
+                if (this.container) {
+                    this.container.opacity = 255;
+                    this.container.reactive = true;
+                    this.container.show();
+                }
+            } else {
+                this.fadeIn();
+            }
+        } else {
+            if (forceInstant) {
+                this._visible = false;
+                this.hide();
+                this.reactive = false;
+                this.opacity = 0;
+                if (this.container) {
+                    this.container.opacity = 0;
+                    this.container.reactive = false;
+                    this.container.hide();
+                }
+            } else {
+                this.fadeOut();
+            }
+        }
 
         let isBusy = this._targetApp != null &&
             (this._targetApp.get_state() === Shell.AppState.STARTING ||

@@ -134,6 +134,22 @@ export default class WackShellExtension extends Extension {
     }
 
     disable() {
+        // Guideline EGO-M-008: Documenting use of unlock-dialog.
+        // This extension supports running during the 'unlock-dialog' session mode
+        // to coordinate with the lock screen. When the extension is disabled during
+        // a lockscreen transition (such as when entering the lockscreen/unlock-dialog),
+        // we perform the following:
+        // - Preserve and cache panel styles, vibrancy classes, and proximity states
+        //   via global variables (_cachePanelHandoffState) so they can be seamlessly
+        //   inherited by the lockscreen clock/dialog without a jarring visual pop.
+        // - Retain the cached window texture snapshots (_destroyWindowCache(isLockscreen))
+        //   so that the lockscreen extension can use them to perform the Cupertino-style
+        //   unlock fade animation.
+        // - Prevent restoring the native activities button visibility on the panel
+        //   if the session is locked, maintaining lockscreen UI integrity.
+        //
+        // Otherwise, if the extension is disabled under normal session conditions, all
+        // temporary handoff states, caches, and custom panel modifications are fully cleared.
         const currentMode = Main.sessionMode.currentMode;
         const isLockscreen = currentMode === 'unlock-dialog' || currentMode === 'greeter' ||
             currentMode === 'gdm' || Main.screenShield?.active || Main.screenShield?.locked;
@@ -396,25 +412,7 @@ export default class WackShellExtension extends Extension {
             }
         }
         if (this._appMenuButton) {
-            this._appMenuButton.opacity = opacity;
-            this._appMenuButton.reactive = visible;
-            this._appMenuButton.can_focus = visible;
-            if (visible) {
-                this._appMenuButton.show();
-            } else {
-                this._appMenuButton.hide();
-            }
-
-            if (this._appMenuButton.container) {
-                this._appMenuButton.container.opacity = opacity;
-                this._appMenuButton.container.reactive = visible;
-                this._appMenuButton.container.can_focus = visible;
-                if (visible) {
-                    this._appMenuButton.container.show();
-                } else {
-                    this._appMenuButton.container.hide();
-                }
-            }
+            this._appMenuButton._sync(true);
         }
 
         // Ensure windows are reset to full opacity and scale when transitioning from locked to unlocked
