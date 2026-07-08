@@ -83,7 +83,7 @@ export default class WackShellExtension extends Extension {
 
         try {
             const lockExt = Main.extensionManager.lookup('wack-lockscreen-clock@rinzler69-wastaken.github.com');
-            if (lockExt && lockExt.state === 1 /* ExtensionState.ENABLED */) {
+            if (lockExt) {
                 const schemaDir = lockExt.dir.get_child('schemas');
                 if (schemaDir.query_exists(null)) {
                     const source = Gio.SettingsSchemaSource.new_from_directory(
@@ -94,11 +94,15 @@ export default class WackShellExtension extends Extension {
                     const schema = source.lookup('org.gnome.shell.extensions.wack-lockscreen-clock', true);
                     if (schema) {
                         this._lockscreenSettings = new Gio.Settings({ settings_schema: schema });
-                        this._lockscreenSettings.connectObject(
+                        const connects = [
                             'changed::lockscreen-mode', () => this._syncWindowSnapshotCaching(),
-                            'changed::cupertino-unlock-fade', () => this._syncWindowSnapshotCaching(),
-                            this
-                        );
+                            'changed::cupertino-unlock-fade', () => this._syncWindowSnapshotCaching()
+                        ];
+                        if (schema.has_key('cupertino-lock-fade')) {
+                            connects.push('changed::cupertino-lock-fade', () => this._syncWindowSnapshotCaching());
+                        }
+                        connects.push(this);
+                        this._lockscreenSettings.connectObject(...connects);
                     }
                 }
             }
@@ -422,6 +426,13 @@ export default class WackShellExtension extends Extension {
                 global.wack_window_snapshots = [];
         }
 
+        if (hasWindows) {
+            this._updatePanelVisibility();
+            if (this._vibrancyManager) {
+                this._vibrancyManager._syncVibrancy();
+            }
+        }
+
         this._lastHasWindows = hasWindows;
     }
 
@@ -438,6 +449,69 @@ export default class WackShellExtension extends Extension {
                 else
                     this._clearWindowSnapshots();
                 return this._origShieldActivate(animate);
+            };
+
+            this._origResetLockScreen = shield._resetLockScreen.bind(shield);
+            shield._resetLockScreen = (params) => {
+                if (this._windowSnapshotCachingEnabled && this._isLockscreenLockFadeEnabled()) {
+                    const origLockDialogGroup = shield._lockDialogGroup;
+                    const origEase = origLockDialogGroup.ease.bind(origLockDialogGroup);
+
+                    origLockDialogGroup.ease = (easeParams) => {
+                        if (easeParams && 'translation_y' in easeParams) {
+                            easeParams.translation_y = 0;
+                        }
+                        return origEase(easeParams);
+                    };
+
+                    global.wack_panel_transitioning = true;
+                    const panel = Main.panel;
+                    if (panel) {
+                        if (!panel._origSessionModeProps) {
+                            panel._origSessionModeProps = {
+                                hasWindows: Main.sessionMode.hasWindows,
+                                hasWorkspaces: Main.sessionMode.hasWorkspaces,
+                                panel: Main.sessionMode.panel,
+                                panelStyle: Main.sessionMode.panelStyle,
+                            };
+                            Main.sessionMode.hasWindows = true;
+                            Main.sessionMode.hasWorkspaces = true;
+                            Main.sessionMode.panel = {
+                                left: ['wack-logo-menu', 'wack-workspace-button', 'wack-app-menu', 'activities'],
+                                center: ['dateMenu'],
+                                right: ['screenRecording', 'screenSharing', 'dwellClick', 'a11y', 'keyboard', 'quickSettings'],
+                            };
+                            Main.sessionMode.panelStyle = null;
+                            Main.sessionMode.emit('updated');
+                        }
+
+                        const panelHeight = panel.height || 40;
+                        panel.translation_y = 0;
+                        panel.ease({
+                            translation_y: -panelHeight,
+                            duration: 250,
+                            mode: Clutter.AnimationMode.EASE_OUT_QUAD
+                        });
+
+                        if (panel._rightBox) {
+                            panel._rightBox.translation_y = 0;
+                            panel._rightBox.ease({
+                                translation_y: panelHeight,
+                                duration: 250,
+                                mode: Clutter.AnimationMode.EASE_OUT_QUAD
+                            });
+                        }
+                    }
+
+                    try {
+                        this._origResetLockScreen(params);
+                        origLockDialogGroup.translation_y = 0;
+                    } finally {
+                        origLockDialogGroup.ease = origEase;
+                    }
+                } else {
+                    this._origResetLockScreen(params);
+                }
             };
         }
     }
@@ -504,6 +578,21 @@ export default class WackShellExtension extends Extension {
         if (Main.screenShield && this._origShieldActivate) {
             Main.screenShield.activate = this._origShieldActivate;
             this._origShieldActivate = null;
+        }
+        if (Main.screenShield && this._origResetLockScreen) {
+            Main.screenShield._resetLockScreen = this._origResetLockScreen;
+            this._origResetLockScreen = null;
+        }
+        global.wack_panel_transitioning = false;
+        const panel = Main.panel;
+        if (panel && panel._origSessionModeProps) {
+            Main.sessionMode.hasWindows = panel._origSessionModeProps.hasWindows;
+            Main.sessionMode.hasWorkspaces = panel._origSessionModeProps.hasWorkspaces;
+            Main.sessionMode.panel = panel._origSessionModeProps.panel;
+            Main.sessionMode.panelStyle = panel._origSessionModeProps.panelStyle;
+            delete panel._origSessionModeProps;
+            Main.sessionMode.emit('updated');
+            panel.translation_y = 0;
         }
         if (!preserveSnapshots)
             this._clearWindowSnapshots();
@@ -679,6 +768,12 @@ export default class WackShellExtension extends Extension {
         return this._lockscreenSettings?.get_boolean('cupertino-unlock-fade') ?? false;
     }
 
+    _isLockscreenLockFadeEnabled() {
+        if (!this._lockscreenSettings) return false;
+        if (!this._lockscreenSettings.settings_schema.has_key('cupertino-lock-fade')) return false;
+        return this._lockscreenSettings.get_boolean('cupertino-lock-fade');
+    }
+
     _isPowerSaverActive() {
         try {
             return this._powerProfilesProxy?.ActiveProfile === 'power-saver';
@@ -694,7 +789,7 @@ export default class WackShellExtension extends Extension {
                 return;
             }
             this._windowSnapshotCachingEnabled = this._isLockscreenCupertinoMode() &&
-                this._isLockscreenUnlockFadeEnabled() &&
+                (this._isLockscreenUnlockFadeEnabled() || this._isLockscreenLockFadeEnabled()) &&
                 !this._isPowerSaverActive();
         } catch {
             this._windowSnapshotCachingEnabled = true;
@@ -1036,7 +1131,12 @@ export default class WackShellExtension extends Extension {
     _clearPanelStyle() {
         Main.panel.remove_style_class_name('panel-proximity');
 
-        if (this._vibrancyManager && this._vibrancyManager.vibrancyActive) {
+        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows;
+        if (isLockscreen) {
+            Main.panel.set_style('background-color: transparent !important; background: transparent !important; box-shadow: none !important; border: none !important;');
+        }
+
+        if (this._vibrancyManager) {
             this._vibrancyManager.applyVibrancyStyle();
         }
     }

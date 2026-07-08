@@ -245,7 +245,7 @@ export default class VibrancyManager {
         const style = this._settings.get_int('vibrancy-style');
         const isDark = this._isDarkColorScheme();
         const isOverview = Main.overview.visibleTarget;
-        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows;
+        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !global.wack_panel_transitioning;
 
         if (style === 1 && !isDark && !isOverview && !isLockscreen && this._currentColors) {
             const leftColor = this._currentColors.left;
@@ -342,6 +342,15 @@ export default class VibrancyManager {
     }
 
     _syncVibrancy() {
+        const isLockMode = Main.sessionMode.currentMode === 'unlock-dialog';
+        if (isLockMode && !global.wack_panel_transitioning) {
+            if (this._panelBlur && this._panelBlur.enabled) {
+                this._panelBlur.disable();
+            }
+            this.applyVibrancyStyle();
+            return;
+        }
+
         const enabled = this._settings.get_boolean('enable-vibrancy');
         const blurMode = this._settings.get_int('vibrancy-blur-mode');
         const bmsConflict = this._bmsHasPanelBlur();
@@ -395,6 +404,24 @@ export default class VibrancyManager {
             }
         };
 
+        const isLockMode = Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows;
+        if (isLockMode) {
+            this._settingStyle = true;
+            try {
+                Main.panel.remove_style_class_name('panel-proximity');
+                Main.panel.remove_style_class_name('light-contrast');
+                clearVibrancyClasses();
+                Main.panel.set_style('background-color: transparent !important; background: transparent !important; box-shadow: none !important; border: none !important;');
+            } finally {
+                this._settingStyle = false;
+            }
+            this._vibrancyStyleActive = false;
+            if (this._panelBlur && this._panelBlur.enabled) {
+                this._panelBlur.disable();
+            }
+            return;
+        }
+
         if (!enabled) {
             if (this._vibrancyStyleActive) {
                 this._settingStyle = true;
@@ -415,7 +442,7 @@ export default class VibrancyManager {
 
         const isDark = this._isDarkColorScheme();
         const isOverview = Main.overview.visibleTarget;
-        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows;
+        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !global.wack_panel_transitioning;
 
         const borrowVenturaLight = this._getBorrowVenturaLight();
         const useVenturaLight = (style === 2 || borrowVenturaLight) && !isDark;
@@ -499,7 +526,6 @@ export default class VibrancyManager {
 
         this._vibrancyStyleActive = true;
 
-        const isLockMode = Main.sessionMode.currentMode === 'unlock-dialog';
         const isShieldActive = Main.screenShield && (Main.screenShield.active || Main.screenShield.locked);
         const isOverviewActive = Main.overview.visible || Main.overview.visibleTarget;
 
