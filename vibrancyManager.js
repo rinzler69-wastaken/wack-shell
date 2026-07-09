@@ -106,7 +106,9 @@ export default class VibrancyManager {
         }
 
         Main.panel.disconnectObject(this);
-        Main.extensionManager.disconnectObject(this);
+        try {
+            Main.extensionManager.disconnectObject(this);
+        } catch { }
 
         if (this._panelBlur) {
             this._panelBlur.disable();

@@ -83,7 +83,8 @@ export const WorkspaceDot = GObject.registerClass({
 
     vfunc_get_preferred_width(forHeight) {
         const factor = Util.lerp(1.0, this.widthMultiplier, this.expansion);
-        return this._dot.get_preferred_width(forHeight).map(v => Math.round(v * factor));
+        const [minWidth, natWidth] = this._dot.get_preferred_width(forHeight);
+        return [Math.round(minWidth * factor), Math.round(natWidth * factor)];
     }
 
     vfunc_get_preferred_height(forWidth) {
@@ -455,7 +456,13 @@ export const WackLogoButton = GObject.registerClass(
             if (!hideForceQuit) {
                 this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
                 this.menu.addMenuItem(new LogoMenuItem(_('Force Quit App'), () => {
-                    new SelectionWindow();
+                    if (this._extension._activeSelection) {
+                        this._extension._activeSelection.destroy();
+                    }
+                    this._extension._activeSelection = new SelectionWindow();
+                    this._extension._activeSelection.connectObject('stop', () => {
+                        this._extension._activeSelection = null;
+                    }, this);
                 }));
             }
 

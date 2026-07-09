@@ -31,6 +31,7 @@ const PowerProfilesProxy = Gio.DBusProxy.makeProxyWrapper(PowerProfilesIface);
 export default class WackShellExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
+        this._clearSnapshotsTimeoutId = 0;
         this.lastPanelStateIsProximity = false;
         global.wack_proximity_active = false;
         global.wack_proximity_bg = null;
@@ -182,10 +183,20 @@ export default class WackShellExtension extends Extension {
             this._queuedUpdateId = null;
         }
 
+        if (this._clearSnapshotsTimeoutId) {
+            GLib.source_remove(this._clearSnapshotsTimeoutId);
+            this._clearSnapshotsTimeoutId = 0;
+        }
+
         // Disable VibrancyManager
         if (this._vibrancyManager) {
             this._vibrancyManager.disable();
             this._vibrancyManager = null;
+        }
+
+        if (this._activeSelection) {
+            this._activeSelection.destroy();
+            this._activeSelection = null;
         }
 
         // Clear gradient and contrast styling
@@ -418,8 +429,18 @@ export default class WackShellExtension extends Extension {
         // Ensure windows are reset to full opacity and scale when transitioning from locked to unlocked
         if (hasWindows && this._lastHasWindows === false) {
             this._resetWindowsOpacity();
-            if (!(Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode()))
-                global.wack_window_snapshots = [];
+            if (!(Main.sessionMode.currentMode === 'unlock-dialog' && this._isLockscreenCupertinoMode())) {
+                if (this._clearSnapshotsTimeoutId) {
+                    GLib.source_remove(this._clearSnapshotsTimeoutId);
+                    this._clearSnapshotsTimeoutId = 0;
+                }
+                // Defer clearing snapshots to allow the lockscreen fade animation to complete
+                this._clearSnapshotsTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+                    this._clearSnapshotsTimeoutId = 0;
+                    this._clearWindowSnapshots();
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
         }
 
         this._lastHasWindows = hasWindows;
@@ -443,6 +464,10 @@ export default class WackShellExtension extends Extension {
     }
 
     _clearWindowSnapshots() {
+        if (this._clearSnapshotsTimeoutId) {
+            GLib.source_remove(this._clearSnapshotsTimeoutId);
+            this._clearSnapshotsTimeoutId = 0;
+        }
         if (global.wack_window_snapshots) {
             for (const snap of global.wack_window_snapshots)
                 snap.content = null;
@@ -504,6 +529,10 @@ export default class WackShellExtension extends Extension {
         if (Main.screenShield && this._origShieldActivate) {
             Main.screenShield.activate = this._origShieldActivate;
             this._origShieldActivate = null;
+        }
+        if (this._clearSnapshotsTimeoutId) {
+            GLib.source_remove(this._clearSnapshotsTimeoutId);
+            this._clearSnapshotsTimeoutId = 0;
         }
         if (!preserveSnapshots)
             this._clearWindowSnapshots();

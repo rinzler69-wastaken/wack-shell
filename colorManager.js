@@ -537,6 +537,10 @@ export async function getPanelColors() {
     };
 
     _cache.set(cacheKey, result);
+    if (_cache.size > 50) {
+        const oldestKey = _cache.keys().next().value;
+        _cache.delete(oldestKey);
+    }
     saveCache();
     return result;
 }
