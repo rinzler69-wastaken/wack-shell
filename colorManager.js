@@ -305,8 +305,8 @@ export async function getPanelColors() {
                         const stream = file.read_finish(readRes);
                         GdkPixbuf.Pixbuf.new_from_stream_at_scale_async(
                             stream,
-                            24,
-                            24,
+                            256,
+                            256,
                             true,
                             null,
                             (streamObj, pixRes) => {
@@ -335,7 +335,7 @@ export async function getPanelColors() {
             const pictureOptions = bgSettings.get_string('picture-options');
             let visibleX = 0, visibleY = 0, visibleW = pbWidth, visibleH = pbHeight;
 
-            if (pictureOptions === 'zoom') {
+            if (pictureOptions === 'zoom' || pictureOptions === 'spanned') {
                 const monitor = Main.layoutManager?.primaryMonitor || { width: 1920, height: 1080 };
                 const monitorWidth = monitor.width;
                 const monitorHeight = monitor.height;
@@ -353,21 +353,21 @@ export async function getPanelColors() {
 
             // Top panel sits at the very top of the visible screen.
             // Sample the top 5% of the visible area.
-            const panelHeight = visibleH * 0.05;
-            const yStart = visibleY;
-            const yEnd = visibleY + panelHeight;
+            const panelHeight = Math.max(2, Math.round(visibleH * 0.05));
+            const yStart = Math.round(visibleY);
+            const yEnd = Math.round(visibleY + panelHeight);
 
             // Left region: leftmost 25% of visible width
-            const leftXStart = visibleX;
-            const leftXEnd = visibleX + visibleW * 0.25;
+            const leftXStart = Math.round(visibleX);
+            const leftXEnd = Math.round(visibleX + visibleW * 0.25);
 
             // Right region: rightmost 25% of visible width
-            const rightXStart = visibleX + visibleW * 0.75;
-            const rightXEnd = visibleX + visibleW;
+            const rightXStart = Math.round(visibleX + visibleW * 0.75);
+            const rightXEnd = Math.round(visibleX + visibleW);
 
             // Center region: middle 20%
-            const centerXStart = visibleX + visibleW * 0.40;
-            const centerXEnd = visibleX + visibleW * 0.60;
+            const centerXStart = Math.round(visibleX + visibleW * 0.40);
+            const centerXEnd = Math.round(visibleX + visibleW * 0.60);
 
             left = sampleRegion(pixels, channels, rowstride, leftXStart, leftXEnd, yStart, yEnd);
             right = sampleRegion(pixels, channels, rowstride, rightXStart, rightXEnd, yStart, yEnd);
@@ -378,8 +378,8 @@ export async function getPanelColors() {
                 const xPct = i / 9;
                 const xStart = Math.round(visibleX + xPct * (visibleW - 1));
                 const colW = Math.max(1, Math.round(visibleW * 0.05));
-                const sampleXStart = Math.max(visibleX, xStart - colW / 2);
-                const sampleXEnd = Math.min(visibleX + visibleW, xStart + colW / 2);
+                const sampleXStart = Math.round(Math.max(visibleX, xStart - colW / 2));
+                const sampleXEnd = Math.round(Math.min(visibleX + visibleW, xStart + colW / 2));
                 rawColSamples.push(sampleRegion(pixels, channels, rowstride, sampleXStart, sampleXEnd, yStart, yEnd));
             }
 
@@ -388,6 +388,7 @@ export async function getPanelColors() {
             const maxVal = Math.max(avgColor.r, avgColor.g, avgColor.b);
             const minVal = Math.min(avgColor.r, avgColor.g, avgColor.b);
             overallChroma = (maxVal - minVal) / 255.0;
+
 
         } catch (e) {
             console.error('WACK Shell/ColorManager: Failed to extract colors from wallpaper', e);
@@ -533,7 +534,11 @@ export async function getPanelColors() {
         leftLuminance: getLuminance(blendedLeft.r, blendedLeft.g, blendedLeft.b),
         rightLuminance: getLuminance(blendedRight.r, blendedRight.g, blendedRight.b),
         centerLuminance: getLuminance(blendedCenter.r, blendedCenter.g, blendedCenter.b),
-        stops: dynamicStops
+        stops: dynamicStops,
+        rawStops: rawColSamples,
+        rawLeft: left,
+        rawRight: right,
+        rawCenter: center,
     };
 
     _cache.set(cacheKey, result);

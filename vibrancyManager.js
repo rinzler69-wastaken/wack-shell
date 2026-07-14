@@ -288,28 +288,15 @@ export default class VibrancyManager {
     _isWallpaperLenient() {
         if (!this._currentColors) return false;
 
-        const leftColor = this._currentColors.left;
-        const rightColor = this._currentColors.right;
-        const centerColor = this._currentColors.center;
+        // ── Helpers ──────────────────────────────────────────────────────────
 
-        const getSaturation = (color) => {
-            const r = color.r / 255;
-            const g = color.g / 255;
-            const b = color.b / 255;
-            const max = Math.max(r, g, b);
-            const min = Math.min(r, g, b);
+        const getSaturation = color => {
+            const r = color.r / 255, g = color.g / 255, b = color.b / 255;
+            const max = Math.max(r, g, b), min = Math.min(r, g, b);
             if (max === min) return 0;
             const l = (max + min) / 2;
             return (max - min) / (1 - Math.abs(2 * l - 1));
         };
-
-        const satL = getSaturation(leftColor);
-        const satC = getSaturation(centerColor);
-        const satR = getSaturation(rightColor);
-
-        if (satL < 0.15 || satC < 0.15 || satR < 0.15) {
-            return false;
-        }
 
         const rgbToHue = (r, g, b) => {
             r /= 255; g /= 255; b /= 255;
@@ -327,20 +314,79 @@ export default class VibrancyManager {
             return h * 360;
         };
 
-        const hueDistance = (h1, h2) => Math.min(Math.abs(h1 - h2), 360 - Math.abs(h1 - h2));
+        const hueDist = (h1, h2) => Math.min(Math.abs(h1 - h2), 360 - Math.abs(h1 - h2));
+
+        // Shared hue-variety analysis used by both analysis paths below.
+        // Returns true/false when a determination can be made, null when all
+        // samples are achromatic (caller should try next data source).
+        const analyzeHueVariety = (rawColors, satThreshold) => {
+            const saturated = rawColors.filter(c => getSaturation(c) >= satThreshold);
+            if (saturated.length === 0) return null; // all achromatic, try next source
+            if (saturated.length < 3) return false;  // too few saturated colors to form a tricolor
+
+            const hues = saturated.map(c => rgbToHue(c.r, c.g, c.b));
+
+            // A tricolor is defined by a bounce-back:
+            // There exists some stop L near the left, some stop R near the right,
+            // such that L and R have similar hues, but some intermediate stop M
+            // has a completely different, high-contrast hue.
+            for (let l = 0; l < Math.min(3, hues.length); l++) {
+                for (let r = Math.max(l + 2, hues.length - 3); r < hues.length; r++) {
+                    const distLR = hueDist(hues[l], hues[r]);
+                    if (distLR <= 60) {
+                        for (let m = l + 1; m < r; m++) {
+                            if (hueDist(hues[m], hues[l]) >= 80 && hueDist(hues[m], hues[r]) >= 80) {
+                                return true; // High-contrast tricolor bounce-back detected!
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        };
+
+        // ── Panel-strip stops (sole source) ──────────────────────────────────
+        // 10 equidistant columns sampled from the top 5% of the image —
+        // exactly the region the panel sits over. Only this matters for the
+        // gradient mode decision; scanning the full image added body-color
+        // noise that biased the system toward lenient.
+        const rawStops = this._currentColors.rawStops;
+        if (rawStops && rawStops.length >= 4) {
+            const result = analyzeHueVariety(rawStops, 0.10);
+            if (result !== null) return result;
+        } else {
+            const stops = this._currentColors.stops;
+            if (stops && stops.length >= 4) {
+                const result = analyzeHueVariety(stops.map(s => s.color), 0.10);
+                if (result !== null) return result;
+            }
+        }
+
+        // ── 3. Coarse 3-point fallback ────────────────────────────────────────
+        // Used for colour-only backgrounds and very old cached results.
+        const leftColor = this._currentColors.rawLeft || this._currentColors.left;
+        const rightColor = this._currentColors.rawRight || this._currentColors.right;
+        const centerColor = this._currentColors.rawCenter || this._currentColors.center;
+
+        const satL = getSaturation(leftColor);
+        const satC = getSaturation(centerColor);
+        const satR = getSaturation(rightColor);
+
+        const saturatedCount = (satL >= 0.15 ? 1 : 0) +
+            (satC >= 0.15 ? 1 : 0) + (satR >= 0.15 ? 1 : 0);
+        if (saturatedCount < 2) return false;
 
         const hLeft = rgbToHue(leftColor.r, leftColor.g, leftColor.b);
         const hCenter = rgbToHue(centerColor.r, centerColor.g, centerColor.b);
         const hRight = rgbToHue(rightColor.r, rightColor.g, rightColor.b);
 
-        const diffLC = hueDistance(hLeft, hCenter);
-        const diffCR = hueDistance(hCenter, hRight);
-        const diffLR = hueDistance(hLeft, hRight);
+        const diffLC = hueDist(hLeft, hCenter);
+        const diffCR = hueDist(hCenter, hRight);
+        const diffLR = hueDist(hLeft, hRight);
 
-        const linearityError = Math.abs(diffLC + diffCR - diffLR);
+        const linearityError = diffLC + diffCR - diffLR; // same as nonLinearity for 3 points
 
-        return (diffLC > 35 && diffCR > 35 && linearityError > 30) ||
-            (diffLC > 18 && diffCR > 18 && diffLR > 45);
+        return linearityError >= 80;
     }
 
     _syncVibrancy() {
