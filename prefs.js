@@ -771,14 +771,6 @@ export default class WackShellPreferences extends ExtensionPreferences {
         menuItemsGroup.add(this._buildSwitchRow(
             settings,
             settingsSignalIds,
-            'hide-forcequit',
-            'Hide Force Quit App Utility',
-            'Remove Force Quit utility option'
-        ));
-
-        menuItemsGroup.add(this._buildSwitchRow(
-            settings,
-            settingsSignalIds,
             'hide-softwarecentre',
             'Hide Software Center Option',
             'Remove Software Center launcher option'

@@ -33,6 +33,10 @@ export default class WackShellExtension extends Extension {
         this._settings = this.getSettings();
         this._clearSnapshotsTimeoutId = 0;
         this.lastPanelStateIsProximity = false;
+        this._dockActors = [];
+        this._dockSignalIds = [];
+        this._dockSnapshotTimeoutId = 0;
+        this._dockDiscoveryTimeoutId = 0;
         global.wack_proximity_active = false;
         global.wack_proximity_bg = null;
         global.wack_proximity_fg = null;
@@ -43,6 +47,10 @@ export default class WackShellExtension extends Extension {
         global.wack_panel_cached_foreground = null;
         global.wack_panel_cached_blur_mode = null;
         global.wack_panel_cached_brightness = null;
+        global.wackDockSnapshots = [];
+        global.wack_window_snapshots = [];
+        this._setupDockSnapshots();
+
 
         // Hide native activities button and suppress it from showing up
         const activities = Main.panel.statusArea['activities'];
@@ -237,6 +245,31 @@ export default class WackShellExtension extends Extension {
         this._lockscreenSettings = null;
         this._powerProfilesProxy?.disconnectObject(this);
         this._powerProfilesProxy = null;
+
+        this._disconnectDockSnapshotWatchers();
+
+if (this._dockSnapshotTimeoutId) {
+    GLib.source_remove(
+        this._dockSnapshotTimeoutId
+    );
+    this._dockSnapshotTimeoutId = 0;
+}
+
+if (this._dockDiscoveryTimeoutId) {
+    GLib.source_remove(
+        this._dockDiscoveryTimeoutId
+    );
+    this._dockDiscoveryTimeoutId = 0;
+}
+
+this._dockActors = [];
+
+if (global.wackDockSnapshots) {
+    for (const snapshot of global.wackDockSnapshots)
+        snapshot.content = null;
+
+    global.wackDockSnapshots = [];
+}
     }
 
 
@@ -252,6 +285,23 @@ export default class WackShellExtension extends Extension {
         delete global.wack_panel_cached_blur_mode;
         delete global.wack_panel_cached_brightness;
     }
+
+    _findActorsByName(root, name, results = []) {
+    if (!root)
+        return results;
+
+    try {
+        if (root.name === name)
+            results.push(root);
+
+        for (const child of root.get_children())
+            this._findActorsByName(child, name, results);
+    } catch (e) {
+        // Actor may have been destroyed while traversing.
+    }
+
+    return results;
+}
 
     _cachePanelHandoffState() {
         const currentClasses = Main.panel.get_style_class_name() || '';
@@ -463,6 +513,62 @@ export default class WackShellExtension extends Extension {
         }
     }
 
+_setupDockSnapshots() {
+    const extension =
+        Main.extensionManager.lookup(
+            'dash-to-dock@micxgx.gmail.com'
+        );
+
+    if (!extension || extension.state !== 1) {
+        console.log('[Wack Shell] Dash to Dock not enabled');
+        return;
+    }
+
+    console.log('[Wack Shell] Dash to Dock detected');
+
+    const findDock = () => {
+        const docks = this._findActorsByName(
+            global.stage,
+            'dashtodockContainer'
+        );
+
+        if (docks.length === 0) {
+            console.log(
+                '[Wack Shell] Waiting for Dash to Dock actor...'
+            );
+
+            return GLib.SOURCE_CONTINUE;
+        }
+
+        this._dockDiscoveryTimeoutId = 0;
+
+        console.log(
+            `[Wack Shell] Found ${docks.length} live dock actor(s)`
+        );
+
+        this._dockActors = docks;
+
+        this._connectDockSnapshotWatchers();
+
+        // Initial snapshot immediately while fully unlocked.
+        this._scheduleDockSnapshot();
+
+        return GLib.SOURCE_REMOVE;
+    };
+
+    // Try immediately first.
+    const result = findDock();
+
+    if (result === GLib.SOURCE_CONTINUE) {
+        this._dockDiscoveryTimeoutId =
+            GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT,
+                500,
+                findDock
+            );
+    }
+}
+
     _clearWindowSnapshots() {
         if (this._clearSnapshotsTimeoutId) {
             GLib.source_remove(this._clearSnapshotsTimeoutId);
@@ -474,6 +580,7 @@ export default class WackShellExtension extends Extension {
         }
         global.wack_window_snapshots = [];
     }
+        
 
     _cacheWindowTextures() {
         this._clearWindowSnapshots();
@@ -524,6 +631,130 @@ export default class WackShellExtension extends Extension {
             }
         });
     }
+
+_cacheDockSnapshots() {
+    if (!this._dockActors?.length)
+        return;
+
+    const snapshots = [];
+
+    for (const dock of this._dockActors) {
+        try {
+            if (!dock || dock.is_destroyed?.())
+                continue;
+
+            const [x, y] =
+                dock.get_transformed_position();
+
+            const [width, height] =
+                dock.get_transformed_size();
+
+            if (width <= 0 || height <= 0)
+                continue;
+
+            const content =
+                dock.paint_to_content(null);
+
+            if (!content)
+                continue;
+
+            snapshots.push({
+                content,
+                x: Math.round(x),
+                y: Math.round(y),
+                width: Math.round(width),
+                height: Math.round(height),
+            });
+
+            console.log(
+                `[Wack Shell] Cached live dock snapshot ` +
+                `${Math.round(width)}x${Math.round(height)} ` +
+                `at ${Math.round(x)},${Math.round(y)}`
+            );
+        } catch (e) {
+            console.error(
+                `[Wack Shell] Dock snapshot failed: ${e}`
+            );
+        }
+    }
+
+    // Important:
+    // Only replace a valid existing cache if capture succeeded.
+    if (snapshots.length > 0) {
+        global.wackDockSnapshots = snapshots;
+
+        console.log(
+            `[Wack Shell] Updated dock cache: ` +
+            `${snapshots.length} snapshot(s)`
+        );
+    }
+}
+
+_scheduleDockSnapshot() {
+    if (this._dockSnapshotTimeoutId) {
+        GLib.source_remove(
+            this._dockSnapshotTimeoutId
+        );
+    }
+
+    this._dockSnapshotTimeoutId =
+        GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            100,
+            () => {
+                this._dockSnapshotTimeoutId = 0;
+
+                this._cacheDockSnapshots();
+
+                return GLib.SOURCE_REMOVE;
+            }
+        );
+}
+
+_connectDockSnapshotWatchers() {
+    this._disconnectDockSnapshotWatchers();
+
+    for (const dock of this._dockActors) {
+        const connect = signal => {
+            try {
+                const id = dock.connect(
+                    signal,
+                    () => this._scheduleDockSnapshot()
+                );
+
+                this._dockSignalIds.push({
+                    actor: dock,
+                    id,
+                });
+            } catch (e) {
+                console.error(
+                    `[Wack Shell] Could not watch ` +
+                    `${signal}: ${e}`
+                );
+            }
+        };
+
+        connect('notify::allocation');
+        connect('notify::visible');
+    }
+
+    console.log(
+        '[Wack Shell] Dock snapshot watchers connected'
+    );
+}
+
+_disconnectDockSnapshotWatchers() {
+    for (const {actor, id} of this._dockSignalIds) {
+        try {
+            actor.disconnect(id);
+        } catch (e) {
+            // Actor may already be destroyed.
+        }
+    }
+
+    this._dockSignalIds = [];
+}
+
 
     _destroyWindowCache(preserveSnapshots = false) {
         if (Main.screenShield && this._origShieldActivate) {

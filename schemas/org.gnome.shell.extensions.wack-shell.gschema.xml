@@ -108,12 +108,6 @@
       <description>Show Lock Screen option in the Logo Menu.</description>
     </key>
 
-    <key type="b" name="hide-forcequit">
-      <default>false</default>
-      <summary>Hide Force Quit Option</summary>
-      <description>Hide the Force Quit utility option in the Logo Menu.</description>
-    </key>
-
     <key type="b" name="hide-softwarecentre">
       <default>false</default>
       <summary>Hide Software Center Option</summary>

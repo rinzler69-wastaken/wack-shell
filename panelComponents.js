@@ -20,7 +20,6 @@ import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.j
 import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import * as Constants from './constants.js';
-import { SelectionWindow } from './selection.js';
 
 const INACTIVE_WORKSPACE_DOT_SCALE = 0.75;
 const BUTTON_DND_ACTIVATION_TIMEOUT = 500;
@@ -240,7 +239,6 @@ export const WackLogoButton = GObject.registerClass(
                 'changed::logo-label-text', () => this._updateLabel(),
                 'changed::show-power-options', () => this._displayMenuItems(),
                 'changed::show-lockscreen', () => this._displayMenuItems(),
-                'changed::hide-forcequit', () => this._displayMenuItems(),
                 'changed::hide-softwarecentre', () => this._displayMenuItems(),
                 this
             );
@@ -451,20 +449,7 @@ export const WackLogoButton = GObject.registerClass(
                 }
             }));
 
-            // 4. Force Quit App
-            const hideForceQuit = this._settings.get_boolean('hide-forcequit');
-            if (!hideForceQuit) {
-                this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-                this.menu.addMenuItem(new LogoMenuItem(_('Force Quit App'), () => {
-                    if (this._extension._activeSelection) {
-                        this._extension._activeSelection.destroy();
-                    }
-                    this._extension._activeSelection = new SelectionWindow();
-                    this._extension._activeSelection.connectObject('stop', () => {
-                        this._extension._activeSelection = null;
-                    }, this);
-                }));
-            }
+
 
             // 5. System Power controls
             const showPower = this._settings.get_boolean('show-power-options');
