@@ -169,7 +169,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
             icon_name: 'preferences-system-symbolic',
         });
 
-       // Group 2.1: Panel Objects
+        // Group 2.1: Panel Objects
         const visibilityGroup = new Adw.PreferencesGroup({
             title: 'Panel Objects',
         });
@@ -191,7 +191,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
         );
         visibilityGroup.add(showAppMenuRow);
 
-       
+
         const showAppIconRow = this._buildSwitchRow(
             settings,
             settingsSignalIds,
@@ -201,7 +201,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
         );
         visibilityGroup.add(showAppIconRow);
 
-        
+
         const coloredAppIconRow = this._buildSwitchRow(
             settings,
             settingsSignalIds,
@@ -211,18 +211,18 @@ export default class WackShellPreferences extends ExtensionPreferences {
         );
         visibilityGroup.add(coloredAppIconRow);
 
-        
+
 
         // Grey out 'show-app-menu-icon' if 'show-app-menu' is false
         const updateIconSensitivity = () => {
             const hasAppMenu = settings.get_boolean('show-app-menu');
             showAppIconRow.sensitive = hasAppMenu;
-            
+
             const hasAppIcon = settings.get_boolean('show-app-menu-icon');
             coloredAppIconRow.sensitive = hasAppMenu && hasAppIcon;
         };
 
-      
+
         const sigAppMenu = settings.connect('changed::show-app-menu', updateIconSensitivity);
         const sigAppIcon = settings.connect('changed::show-app-menu-icon', updateIconSensitivity);
         settingsSignalIds.push(sigAppMenu, sigAppIcon);
@@ -661,7 +661,7 @@ export default class WackShellPreferences extends ExtensionPreferences {
         // -- PAGE 3: LOGO & MENU CUSTOMIZATION --------------------------------
         // =====================================================================
         const logoPage = new Adw.PreferencesPage({
-            title: 'Logo Menu',
+            title: 'Miscellaneous',
             icon_name: 'image-x-generic-symbolic',
         });
 
@@ -904,6 +904,104 @@ export default class WackShellPreferences extends ExtensionPreferences {
         }
 
         extrasGroup.add(aboutPaneRow);
+
+        // Nautilus Script: Set as Lockscreen Wallpaper
+        const NAUTILUS_SCRIPT_NAME = 'Set as Lockscreen Wallpaper';
+        const NAUTILUS_SCRIPTS_DIR = `${GLib.get_home_dir()}/.local/share/nautilus/scripts`;
+        const NAUTILUS_SCRIPT_PATH = `${NAUTILUS_SCRIPTS_DIR}/${NAUTILUS_SCRIPT_NAME}`;
+        const INSTALLER_PATH = `${this.path}/scripts/install-lockscreen-nautilus-script.sh`;
+
+        const isNautilusScriptInstalled = () =>
+            GLib.file_test(NAUTILUS_SCRIPT_PATH, GLib.FileTest.EXISTS);
+
+        const nautilusExpander = new Adw.ExpanderRow({
+            title: 'Lockscreen Wallpaper via Nautilus',
+            subtitle: 'Requires and coordinates with WACK – Sonoma Lockscreen to apply custom lockscreen wallpapers',
+        });
+
+        const nautilusStatusLabel = new Gtk.Label({
+            valign: Gtk.Align.CENTER,
+        });
+        nautilusExpander.add_suffix(nautilusStatusLabel);
+
+        const refreshNautilusStatus = () => {
+            const installed = isNautilusScriptInstalled();
+            nautilusStatusLabel.label = installed ? 'Installed' : 'Not installed';
+            nautilusStatusLabel.css_classes = installed ? ['success'] : ['dim-label'];
+            nautilusExpander.subtitle = installed
+                ? `Right-click any image in Nautilus → Scripts → ${NAUTILUS_SCRIPT_NAME}`
+                : 'Requires and coordinates with WACK – Sonoma Lockscreen to apply custom lockscreen wallpapers';
+            nautilusRemoveRow.visible = installed;
+        };
+
+        // Install row
+        const nautilusInstallRow = new Adw.ActionRow({
+            title: 'Install Nautilus Script',
+            subtitle: 'Adds a "Set as Lockscreen Wallpaper" option under Nautilus → right-click → Scripts',
+        });
+        const installNautilusBtn = new Gtk.Button({
+            icon_name: 'system-software-install-symbolic',
+            tooltip_text: 'Install script',
+            css_classes: ['flat'],
+            valign: Gtk.Align.CENTER,
+        });
+        installNautilusBtn.connect('clicked', () => {
+            try {
+                const proc = Gio.Subprocess.new(
+                    ['bash', INSTALLER_PATH],
+                    Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE
+                );
+                proc.wait_async(null, (_proc, result) => {
+                    proc.wait_finish(result);
+                    refreshNautilusStatus();
+                    window.add_toast(new Adw.Toast({
+                        title: isNautilusScriptInstalled()
+                            ? 'Nautilus script installed!'
+                            : 'Installation failed — check terminal for details.',
+                    }));
+                });
+            } catch (e) {
+                window.add_toast(new Adw.Toast({ title: `Error: ${e.message}` }));
+            }
+        });
+        nautilusInstallRow.add_suffix(installNautilusBtn);
+        nautilusInstallRow.activatable_widget = installNautilusBtn;
+        nautilusExpander.add_row(nautilusInstallRow);
+
+        // Remove row — only visible when the script is installed
+        const nautilusRemoveRow = new Adw.ActionRow({
+            title: 'Remove Nautilus Script',
+            subtitle: 'Removes the script from Nautilus',
+        });
+        const removeNautilusBtn = new Gtk.Button({
+            icon_name: 'user-trash-symbolic',
+            tooltip_text: 'Remove script',
+            css_classes: ['flat'],
+            valign: Gtk.Align.CENTER,
+        });
+        removeNautilusBtn.connect('clicked', () => {
+            try {
+                const proc = Gio.Subprocess.new(
+                    ['bash', INSTALLER_PATH, '--remove'],
+                    Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE
+                );
+                proc.wait_async(null, (_proc, result) => {
+                    proc.wait_finish(result);
+                    refreshNautilusStatus();
+                    window.add_toast(new Adw.Toast({ title: 'Nautilus script removed.' }));
+                });
+            } catch (e) {
+                window.add_toast(new Adw.Toast({ title: `Error: ${e.message}` }));
+            }
+        });
+        nautilusRemoveRow.add_suffix(removeNautilusBtn);
+        nautilusRemoveRow.activatable_widget = removeNautilusBtn;
+        nautilusExpander.add_row(nautilusRemoveRow);
+
+        // Set initial state (must come after both rows are added)
+        refreshNautilusStatus();
+
+        extrasGroup.add(nautilusExpander);
         logoPage.add(extrasGroup);
         window.add(logoPage);
 

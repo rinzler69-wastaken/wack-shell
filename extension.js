@@ -6,6 +6,7 @@ import Meta from 'gi://Meta';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as OverviewControls from 'resource:///org/gnome/shell/ui/overviewControls.js';
+import * as BackgroundMenu from 'resource:///org/gnome/shell/ui/backgroundMenu.js';
 
 import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -119,6 +120,8 @@ this._settings.connectObject(
             }
         } catch {
         }
+
+        this._setupLockscreenWallpaperMenu();
 
         this._powerProfilesProxy = null;
         try {
@@ -252,6 +255,7 @@ this._settings.connectObject(
         this._destroyWindowCache(isLockscreen);
         this._destroyWorkspacesAppGrid();
         this._windowSnapshotCachingEnabled = false;
+        this._teardownLockscreenWallpaperMenu();
         this._lockscreenSettings?.disconnectObject(this);
         this._lockscreenSettings = null;
         this._powerProfilesProxy?.disconnectObject(this);
@@ -283,6 +287,122 @@ if (global.wackDockSnapshots) {
 }
     }
 
+    // ── Lockscreen Wallpaper Desktop Menu ────────────────────────────────────
+    //
+    // Injects a "Set as Lockscreen Wallpaper…" item into GNOME Shell's desktop
+    // right-click BackgroundMenu. When clicked, spawns zenity to let the user
+    // pick an image file, then writes the path directly to the sonoma lockscreen
+    // extension's GSettings (lockscreen-wallpaper-path + lockscreen-wallpaper-enable).
+    // Uses InjectionManager so cleanup is guaranteed on disable().
+
+    _setupLockscreenWallpaperMenu() {
+        this._addedBgMenuItems = [];
+
+        // Lazily inject our item into every BackgroundMenu instance when it opens.
+        const ext = this;
+        const origOpen = BackgroundMenu.BackgroundMenu.prototype.open;
+        BackgroundMenu.BackgroundMenu.prototype.open = function (...args) {
+            if (!this._wackLockscreenWallpaperItem) {
+                const item = ext._createLockscreenWallpaperMenuItem(this);
+                if (item) {
+                    this._wackLockscreenWallpaperItem = item;
+                    ext._addedBgMenuItems.push(item);
+                }
+            }
+            return origOpen.call(this, ...args);
+        };
+        this._origBgMenuOpen = origOpen;
+    }
+
+    _createLockscreenWallpaperMenuItem(menu) {
+        const item = menu.addAction(_('Change Lockscreen Background\u2026'), () => {
+            this._pickLockscreenWallpaper();
+        });
+        // Place right after "Change Background…" (index 0) and before the separator
+        menu.moveMenuItem(item, 1);
+        return item;
+    }
+
+    _pickLockscreenWallpaper() {
+        const imageFilter = 'image/png image/jpeg image/webp image/gif image/bmp image/tiff';
+        const argv = [
+            'zenity',
+            '--file-selection',
+            '--title', _('Select Lockscreen Wallpaper'),
+            '--file-filter', `${_('Image files')} | *.png *.jpg *.jpeg *.webp *.gif *.bmp *.tiff *.tif`,
+        ];
+
+        try {
+            const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+            proc.communicate_utf8_async(null, null, (_proc, result) => {
+                try {
+                    const [, stdout] = proc.communicate_utf8_finish(result);
+                    if (proc.get_exit_status() !== 0 || !stdout)
+                        return;
+                    const path = stdout.trim();
+                    if (!path || !Gio.File.new_for_path(path).query_exists(null))
+                        return;
+                    this._applyLockscreenWallpaper(path);
+                } catch (e) {
+                    console.error(`[Wack Shell] Lockscreen wallpaper picker failed: ${e}`);
+                }
+            });
+        } catch (e) {
+            console.error(`[Wack Shell] Failed to spawn zenity: ${e}`);
+        }
+    }
+
+    _applyLockscreenWallpaper(path) {
+        // Prefer the already-loaded _lockscreenSettings; fall back to a fresh lookup.
+        let settings = this._lockscreenSettings;
+        if (!settings) {
+            try {
+                const lockExt = Main.extensionManager.lookup('wack-lockscreen-clock@rinzler69-wastaken.github.com');
+                if (lockExt?.dir) {
+                    const schemaDir = lockExt.dir.get_child('schemas');
+                    if (schemaDir.query_exists(null)) {
+                        const source = Gio.SettingsSchemaSource.new_from_directory(
+                            schemaDir.get_path(),
+                            Gio.SettingsSchemaSource.get_default(),
+                            false
+                        );
+                        const schema = source.lookup('org.gnome.shell.extensions.wack-lockscreen-clock', true);
+                        if (schema)
+                            settings = new Gio.Settings({ settings_schema: schema });
+                    }
+                }
+            } catch {
+            }
+        }
+
+        if (!settings) {
+            // Last resort: try the compiled system schema
+            try {
+                settings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.wack-lockscreen-clock' });
+            } catch {
+                console.error('[Wack Shell] Could not find wack-lockscreen-clock schema to set wallpaper.');
+                return;
+            }
+        }
+
+        settings.set_string('lockscreen-wallpaper-path', path);
+        settings.set_boolean('lockscreen-wallpaper-enable', true);
+        console.log(`[Wack Shell] Lockscreen wallpaper set to: ${path}`);
+    }
+
+    _teardownLockscreenWallpaperMenu() {
+        if (this._origBgMenuOpen) {
+            BackgroundMenu.BackgroundMenu.prototype.open = this._origBgMenuOpen;
+            this._origBgMenuOpen = null;
+        }
+        for (const item of (this._addedBgMenuItems ?? [])) {
+            if (item) {
+                delete item.menu?._wackLockscreenWallpaperItem;
+                item.destroy();
+            }
+        }
+        this._addedBgMenuItems = [];
+    }
 
     _clearPanelHandoffState() {
         delete global.wack_proximity_active;
