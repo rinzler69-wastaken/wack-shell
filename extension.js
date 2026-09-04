@@ -295,19 +295,76 @@ if (global.wackDockSnapshots) {
     // extension's GSettings (lockscreen-wallpaper-path + lockscreen-wallpaper-enable).
     // Uses InjectionManager so cleanup is guaranteed on disable().
 
+    _getLockscreenSettings() {
+        if (this._lockscreenSettings)
+            return this._lockscreenSettings;
+
+        try {
+            const lockExt = Main.extensionManager.lookup('wack-lockscreen-clock@rinzler69-wastaken.github.com');
+            if (lockExt && lockExt.state === 1 /* ExtensionState.ENABLED */) {
+                const schemaDir = lockExt.dir?.get_child('schemas');
+                if (schemaDir?.query_exists(null)) {
+                    const source = Gio.SettingsSchemaSource.new_from_directory(
+                        schemaDir.get_path(),
+                        Gio.SettingsSchemaSource.get_default(),
+                        false
+                    );
+                    const schema = source.lookup('org.gnome.shell.extensions.wack-lockscreen-clock', true);
+                    if (schema) {
+                        this._lockscreenSettings = new Gio.Settings({ settings_schema: schema });
+                        this._lockscreenSettings.connectObject(
+                            'changed::lockscreen-mode', () => this._syncWindowSnapshotCaching(),
+                            'changed::cupertino-unlock-fade', () => this._syncWindowSnapshotCaching(),
+                            this
+                        );
+                        return this._lockscreenSettings;
+                    }
+                }
+            }
+        } catch {
+        }
+
+        try {
+            this._lockscreenSettings = new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.wack-lockscreen-clock' });
+            return this._lockscreenSettings;
+        } catch {
+            return null;
+        }
+    }
+
+    _isCustomWallpaperEnabled() {
+        const settings = this._getLockscreenSettings();
+        if (!settings)
+            return false;
+        try {
+            return settings.get_boolean('lockscreen-wallpaper-enable');
+        } catch {
+            return false;
+        }
+    }
+
     _setupLockscreenWallpaperMenu() {
         this._addedBgMenuItems = [];
 
-        // Lazily inject our item into every BackgroundMenu instance when it opens.
+        // Lazily inject our item into every BackgroundMenu instance when it opens IF custom lockscreen wallpaper is enabled.
         const ext = this;
         const origOpen = BackgroundMenu.BackgroundMenu.prototype.open;
         BackgroundMenu.BackgroundMenu.prototype.open = function (...args) {
-            if (!this._wackLockscreenWallpaperItem) {
-                const item = ext._createLockscreenWallpaperMenuItem(this);
-                if (item) {
-                    this._wackLockscreenWallpaperItem = item;
-                    ext._addedBgMenuItems.push(item);
+            const isWallpaperEnabled = ext._isCustomWallpaperEnabled();
+            if (isWallpaperEnabled) {
+                if (!this._wackLockscreenWallpaperItem) {
+                    const item = ext._createLockscreenWallpaperMenuItem(this);
+                    if (item) {
+                        this._wackLockscreenWallpaperItem = item;
+                        ext._addedBgMenuItems.push(item);
+                    }
                 }
+            } else if (this._wackLockscreenWallpaperItem) {
+                const idx = ext._addedBgMenuItems.indexOf(this._wackLockscreenWallpaperItem);
+                if (idx !== -1)
+                    ext._addedBgMenuItems.splice(idx, 1);
+                this._wackLockscreenWallpaperItem.destroy();
+                delete this._wackLockscreenWallpaperItem;
             }
             return origOpen.call(this, ...args);
         };
