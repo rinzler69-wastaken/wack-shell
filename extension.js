@@ -381,12 +381,12 @@ if (global.wackDockSnapshots) {
     }
 
     _pickLockscreenWallpaper() {
-        const imageFilter = 'image/png image/jpeg image/webp image/gif image/bmp image/tiff';
+        const imageFilter = 'image/png image/jpeg image/webp image/jxl image/gif image/bmp image/tiff';
         const argv = [
             'zenity',
             '--file-selection',
             '--title', _('Select Lockscreen Wallpaper'),
-            '--file-filter', `${_('Image files')} | *.png *.jpg *.jpeg *.webp *.gif *.bmp *.tiff *.tif`,
+            '--file-filter', `${_('Image files')} | *.png *.jpg *.jpeg *.webp *.jxl *.gif *.bmp *.tiff *.tif`,
         ];
 
         try {
