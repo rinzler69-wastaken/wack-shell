@@ -814,6 +814,74 @@ export default class WackShellPreferences extends ExtensionPreferences {
         ));
         logoPage.add(menuItemsGroup);
 
+        const shortcutsGroup = new Adw.PreferencesGroup({
+            title: 'Keyboard Shortcut Hints',
+            description: 'Display shortcut hints on menu items under the logo menu.',
+        });
+
+        const showShortcutsRow = this._buildSwitchRow(
+            settings,
+            settingsSignalIds,
+            'show-menu-shortcuts',
+            'Show Shortcut Hints',
+            'Display keyboard shortcuts next to applicable menu options'
+        );
+        shortcutsGroup.add(showShortcutsRow);
+
+        const shortcutSourceRow = this._buildComboRowInt(
+            settings,
+            settingsSignalIds,
+            'menu-shortcut-source',
+            'Shortcut Source',
+            'Determine which shortcuts to display',
+            [
+                'User Defined (GNOME Settings)',
+                'System Default',
+            ]
+        );
+        shortcutsGroup.add(shortcutSourceRow);
+
+        const shortcutStyleRow = this._buildComboRowInt(
+            settings,
+            settingsSignalIds,
+            'menu-shortcut-style',
+            'Symbols Style',
+            'Choose keyboard modifier symbols or plain text',
+            [
+                'Auto-detect Hardware',
+                'Cupertino',
+                'PC',
+            ]
+        );
+        shortcutsGroup.add(shortcutStyleRow);
+
+        const shortcutAmountRow = this._buildComboRowInt(
+            settings,
+            settingsSignalIds,
+            'menu-shortcut-amount',
+            'Shortcut Coverage',
+            'Choose which menu items display shortcuts',
+            [
+                'Less',
+                'More',
+            ]
+        );
+        shortcutsGroup.add(shortcutAmountRow);
+
+        const updateShortcutsSensitivity = () => {
+            const enabled = settings.get_boolean('show-menu-shortcuts');
+            const isCustom = settings.get_int('menu-shortcut-source') === 0;
+            shortcutSourceRow.sensitive = enabled;
+            shortcutStyleRow.sensitive = enabled;
+            shortcutAmountRow.sensitive = enabled && isCustom;
+        };
+        const sigShortcuts = settings.connect('changed::show-menu-shortcuts', updateShortcutsSensitivity);
+        const sigSource = settings.connect('changed::menu-shortcut-source', updateShortcutsSensitivity);
+        settingsSignalIds.push(sigShortcuts, sigSource);
+        updateShortcutsSensitivity();
+
+        logoPage.add(shortcutsGroup);
+
         const commandsGroup = new Adw.PreferencesGroup({
             title: 'Application Commands',
             description: 'Commands executed to open standard applications',

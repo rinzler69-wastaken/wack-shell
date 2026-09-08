@@ -29,11 +29,222 @@ const { clamp } = Constants;
 // Custom MenuItem class registered once at module load
 export const LogoMenuItem = GObject.registerClass(
     class WackLogoMenuItem extends PopupMenu.PopupMenuItem {
-        _init(name, activateFunction) {
+        _init(name, activateFunction, shortcut = null) {
             super._init(name);
             this.connect('activate', activateFunction);
+
+            if (shortcut) {
+                this._shortcutLabel = new St.Label({
+                    text: shortcut,
+                    style_class: 'wack-logo-menu-shortcut',
+                    y_align: Clutter.ActorAlign.CENTER,
+                    x_align: Clutter.ActorAlign.END,
+                    x_expand: true,
+                });
+                this.add_child(this._shortcutLabel);
+            }
         }
     });
+
+let _isMacCached = null;
+function isMacHardware() {
+    if (_isMacCached !== null) return _isMacCached;
+    try {
+        const vendorPath = '/sys/class/dmi/id/sys_vendor';
+        if (GLib.file_test(vendorPath, GLib.FileTest.EXISTS)) {
+            const [ok, contents] = GLib.file_get_contents(vendorPath);
+            if (ok) {
+                const str = new TextDecoder().decode(contents).trim().toLowerCase();
+                if (str.includes('apple')) {
+                    _isMacCached = true;
+                    return true;
+                }
+            }
+        }
+        const dtPath = '/sys/firmware/devicetree/base/compatible';
+        if (GLib.file_test(dtPath, GLib.FileTest.EXISTS)) {
+            const [ok, contents] = GLib.file_get_contents(dtPath);
+            if (ok) {
+                const str = new TextDecoder().decode(contents).toLowerCase();
+                if (str.includes('apple,')) {
+                    _isMacCached = true;
+                    return true;
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Failed to detect hardware type:', e);
+    }
+    _isMacCached = false;
+    return false;
+}
+
+function isMacStyle(settings) {
+    const styleChoice = settings.get_int('menu-shortcut-style');
+    if (styleChoice === 1) return true;
+    if (styleChoice === 2) return false;
+    return isMacHardware();
+}
+
+function formatShortcut(binding, isMac) {
+    if (!binding || typeof binding !== 'string') return null;
+    const trimmed = binding.trim();
+    if (!trimmed) return null;
+
+    const hasCtrl = /<(Control|Primary)>/i.test(trimmed);
+    const hasAlt = /<Alt>/i.test(trimmed);
+    const hasShift = /<Shift>/i.test(trimmed);
+    const hasSuper = /<Super>/i.test(trimmed);
+    const key = trimmed.replace(/<[^>]+>/g, '').trim();
+    if (!key) return null;
+
+    if (isMac) {
+        let res = '';
+        if (hasCtrl) res += '⌃';
+        if (hasAlt) res += '⌥';
+        if (hasShift) res += '⇧';
+        if (hasSuper) res += '⌘';
+        const macKeys = {
+            'delete': '⌦',
+            'backspace': '⌫',
+            'return': '↩',
+            'enter': '↩',
+            'escape': '⎋',
+            'esc': '⎋',
+            'space': '␣',
+            'tab': '⇥',
+            'up': '↑',
+            'down': '↓',
+            'left': '←',
+            'right': '→',
+        };
+        const lowerKey = key.toLowerCase();
+        res += macKeys[lowerKey] || key.toUpperCase();
+        return res;
+    } else {
+        const mods = [];
+        if (hasCtrl) mods.push('Ctrl');
+        if (hasAlt) mods.push('Alt');
+        if (hasShift) mods.push('Shift');
+        if (hasSuper) mods.push('Super');
+        const pcKeys = {
+            'delete': 'Del',
+            'backspace': 'Backspace',
+            'return': 'Enter',
+            'enter': 'Enter',
+            'escape': 'Esc',
+            'esc': 'Esc',
+            'space': 'Space',
+            'tab': 'Tab',
+            'page_up': 'PgUp',
+            'page_down': 'PgDn',
+        };
+        const lowerKey = key.toLowerCase();
+        const formattedKey = pcKeys[lowerKey] || (key.length === 1 ? key.toUpperCase() : key);
+        mods.push(formattedKey);
+        return mods.join('+');
+    }
+}
+
+function resolveShortcut(action, sourceMode, isMac) {
+    // sourceMode: 0 = User Defined (GNOME Settings), 1 = System Default
+    if (sourceMode === 0) {
+        try {
+            const mk = new Gio.Settings({ schema_id: 'org.gnome.settings-daemon.plugins.media-keys' });
+            const customPaths = mk.get_strv('custom-keybindings') || [];
+            for (const path of customPaths) {
+                const s = new Gio.Settings({
+                    schema_id: 'org.gnome.settings-daemon.plugins.media-keys.custom-keybinding',
+                    path,
+                });
+                const name = (s.get_string('name') || '').toLowerCase();
+                const cmd = (s.get_string('command') || '').toLowerCase();
+                const binding = s.get_string('binding');
+                if (!binding) continue;
+
+                if (action === 'lock-screen') {
+                    if (name === 'lock' || name === 'lock screen' || cmd.includes('lock')) {
+                        return formatShortcut(binding, isMac);
+                    }
+                } else if (action === 'logout') {
+                    if ((name === 'log out' || name === 'logout') && !cmd.includes('--reboot') && !cmd.includes('--power-off')) {
+                        return formatShortcut(binding, isMac);
+                    }
+                } else if (action === 'restart') {
+                    if (name === 'restart' || cmd.includes('--reboot')) {
+                        return formatShortcut(binding, isMac);
+                    }
+                } else if (action === 'shutdown') {
+                    if (name === 'shutdown' || name === 'shut down' || name === 'power off' || cmd.includes('--power-off')) {
+                        return formatShortcut(binding, isMac);
+                    }
+                } else if (action === 'settings') {
+                    if (name === 'settings' || name === 'system settings' || name.includes('control center') || cmd.includes('gnome-control-center')) {
+                        return formatShortcut(binding, isMac);
+                    }
+                } else if (action === 'terminal') {
+                    if (name.includes('terminal') || cmd.includes('terminal') || cmd.includes('ptyxis') || cmd.includes('alacritty') || cmd.includes('kitty') || cmd.includes('ghostty') || cmd.includes('wezterm') || cmd.includes('kgx') || cmd.includes('foot')) {
+                        return formatShortcut(binding, isMac);
+                    }
+                } else if (action === 'extensions') {
+                    if (name.includes('extension') || cmd.includes('gnome-extensions-app') || cmd.includes('extension-manager')) {
+                        return formatShortcut(binding, isMac);
+                    }
+                } else if (action === 'system-monitor') {
+                    if (name.includes('monitor') || name.includes('task manager') || name.includes('system monitor') || cmd.includes('gnome-system-monitor') || cmd.includes('resources') || cmd.includes('mission-center') || cmd.includes('btop') || cmd.includes('htop')) {
+                        return formatShortcut(binding, isMac);
+                    }
+                }
+            }
+
+            if (action === 'lock-screen') {
+                const bindings = mk.get_strv('screensaver') || [];
+                if (bindings.length > 0 && bindings[0]) {
+                    return formatShortcut(bindings[0], isMac);
+                }
+            } else if (action === 'logout') {
+                const bindings = mk.get_strv('logout') || [];
+                if (bindings.length > 0 && bindings[0]) {
+                    return formatShortcut(bindings[0], isMac);
+                }
+            } else if (action === 'settings') {
+                const userVal = mk.get_user_value('control-center');
+                if (userVal) {
+                    const bindings = mk.get_strv('control-center') || [];
+                    if (bindings.length > 0 && bindings[0]) {
+                        return formatShortcut(bindings[0], isMac);
+                    }
+                }
+            } else if (action === 'terminal') {
+                const userVal = mk.get_user_value('terminal');
+                if (userVal) {
+                    const bindings = mk.get_strv('terminal') || [];
+                    if (bindings.length > 0 && bindings[0]) {
+                        return formatShortcut(bindings[0], isMac);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to resolve shortcut from GNOME settings:', e);
+        }
+    }
+
+    // System Defaults
+    if (action === 'lock-screen') {
+        return isMac ? '⌃⌘Q' : 'Super+L';
+    } else if (action === 'logout') {
+        return isMac ? '⇧⌘Q' : 'Ctrl+Alt+Del';
+    }
+    return null;
+}
+
+function getSystemUserName() {
+    try {
+        return GLib.get_user_name() || '';
+    } catch (e) {
+        return '';
+    }
+}
 
 // Workspace dot actor
 export const WorkspaceDot = GObject.registerClass({
@@ -240,8 +451,26 @@ export const WackLogoButton = GObject.registerClass(
                 'changed::show-power-options', () => this._displayMenuItems(),
                 'changed::show-lockscreen', () => this._displayMenuItems(),
                 'changed::hide-softwarecentre', () => this._displayMenuItems(),
+                'changed::show-menu-shortcuts', () => this._displayMenuItems(),
+                'changed::menu-shortcut-source', () => this._displayMenuItems(),
+                'changed::menu-shortcut-style', () => this._displayMenuItems(),
+                'changed::menu-shortcut-amount', () => this._displayMenuItems(),
                 this
             );
+
+            // Re-render menu on open so newly assigned shortcuts are instantly detected
+            this.menu.connectObject('open-state-changed', (menu, isOpen) => {
+                if (isOpen)
+                    this._displayMenuItems();
+            }, this);
+
+            // Also monitor GNOME media-keys settings for changes in the background
+            try {
+                this._mediaKeysSettings = new Gio.Settings({ schema_id: 'org.gnome.settings-daemon.plugins.media-keys' });
+                this._mediaKeysSettings.connectObject('changed', () => this._displayMenuItems(), this);
+            } catch (e) {
+                console.error('Failed to monitor media-keys settings:', e);
+            }
 
             this._updateIcon();
             this._updateIconSize();
@@ -383,8 +612,23 @@ export const WackLogoButton = GObject.registerClass(
         _displayMenuItems() {
             this.menu.removeAll();
 
+            const showShortcuts = this._settings.get_boolean('show-menu-shortcuts');
+            const shortcutSource = this._settings.get_int('menu-shortcut-source');
+            const shortcutAmount = this._settings.get_int('menu-shortcut-amount');
+            const isMac = isMacStyle(this._settings);
+
+            const getShortcut = (action) => {
+                if (!showShortcuts) return null;
+                // "More" is only available when displaying custom shortcuts (shortcutSource === 0).
+                // If System Default (1) or "Less" (0), only show shortcuts for Lock Screen and Log Out.
+                if ((shortcutAmount === 0 || shortcutSource === 1) && action !== 'lock-screen' && action !== 'logout') {
+                    return null;
+                }
+                return resolveShortcut(action, shortcutSource, isMac);
+            };
+
             // 1. About System / Distro Info
-            this.menu.addMenuItem(new LogoMenuItem(_('About My System'), () => {
+            this.menu.addMenuItem(new LogoMenuItem(_('About This System'), () => {
                 const home = GLib.get_home_dir();
                 const aboutPanePaths = [
                     '/usr/local/bin/aboutpane',
@@ -409,7 +653,7 @@ export const WackLogoButton = GObject.registerClass(
 
             this.menu.addMenuItem(new LogoMenuItem(_('System Settings...'), () => {
                 Util.spawn(['gnome-control-center']);
-            }));
+            }, getShortcut('settings')));
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -430,11 +674,11 @@ export const WackLogoButton = GObject.registerClass(
 
             this.menu.addMenuItem(new LogoMenuItem(_('System Monitor'), () => {
                 Util.trySpawnCommandLine(this._settings.get_string('menu-button-system-monitor'));
-            }));
+            }, getShortcut('system-monitor')));
 
             this.menu.addMenuItem(new LogoMenuItem(_('Terminal'), () => {
                 Util.trySpawnCommandLine(this._settings.get_string('menu-button-terminal'));
-            }));
+            }, getShortcut('terminal')));
 
             this.menu.addMenuItem(new LogoMenuItem(_('Extensions'), () => {
                 const appSys = Shell.AppSystem.get_default();
@@ -447,7 +691,7 @@ export const WackLogoButton = GObject.registerClass(
                         console.error(e);
                     }
                 }
-            }));
+            }, getShortcut('extensions')));
 
 
 
@@ -463,10 +707,10 @@ export const WackLogoButton = GObject.registerClass(
                 }));
                 this.menu.addMenuItem(new LogoMenuItem(_('Restart...'), () => {
                     SystemActions.getDefault().activateRestart();
-                }));
+                }, getShortcut('restart')));
                 this.menu.addMenuItem(new LogoMenuItem(_('Shut Down...'), () => {
                     SystemActions.getDefault().activatePowerOff();
-                }));
+                }, getShortcut('shutdown')));
 
                 // Separator line between Power and Session options
                 this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -474,13 +718,16 @@ export const WackLogoButton = GObject.registerClass(
                 // Session controls
                 this.menu.addMenuItem(new LogoMenuItem(_('Lock Screen'), () => {
                     SystemActions.getDefault().activateLockScreen();
-                }));
+                }, getShortcut('lock-screen')));
                 this.menu.addMenuItem(new LogoMenuItem(_('Switch User...'), () => {
                     SystemActions.getDefault().activateSwitchUser();
                 }));
-                this.menu.addMenuItem(new LogoMenuItem(_('Log Out...'), () => {
+
+                const username = getSystemUserName();
+                const logoutLabel = username ? `${_('Log Out')} ${username}...` : _('Log Out...');
+                this.menu.addMenuItem(new LogoMenuItem(logoutLabel, () => {
                     SystemActions.getDefault().activateLogout();
-                }));
+                }, getShortcut('logout')));
             }
         }
 
@@ -513,6 +760,11 @@ export const WackLogoButton = GObject.registerClass(
         destroy() {
             this._settings.disconnectObject(this);
             Main.overview.disconnectObject(this);
+            this.menu.disconnectObject(this);
+            if (this._mediaKeysSettings) {
+                this._mediaKeysSettings.disconnectObject(this);
+                this._mediaKeysSettings = null;
+            }
             if (this._xdndTimeOut) {
                 GLib.source_remove(this._xdndTimeOut);
                 this._xdndTimeOut = 0;
@@ -545,7 +797,8 @@ export const WackAppMenuButton = GObject.registerClass({
         this.bind_property('reactive', this, 'can-focus', 0);
         this.reactive = false;
 
-        this._container = new St.BoxLayout({ style_class: 'panel-status-menu-box' , y_align: Clutter.ActorAlign.CENTER,
+        this._container = new St.BoxLayout({
+            style_class: 'panel-status-menu-box', y_align: Clutter.ActorAlign.CENTER,
         });
         bin.set_child(this._container);
 
@@ -559,7 +812,7 @@ export const WackAppMenuButton = GObject.registerClass({
 
         this._label = new St.Label({
             y_align: Clutter.ActorAlign.CENTER,
-            
+
         });
         this._container.add_child(this._label);
 
@@ -584,11 +837,11 @@ export const WackAppMenuButton = GObject.registerClass({
             this._sync.bind(this), this);
 
         this._settings.connectObject(
-    'changed::colored-app-menu-icon',       this._updateIconEffect.bind(this),
-    'changed::show-app-menu-icon', this._updateAppMenuVisibility.bind(this),
-    'changed::show-app-menu-label', this._updateAppMenuVisibility.bind(this),
-    this
-);
+            'changed::colored-app-menu-icon', this._updateIconEffect.bind(this),
+            'changed::show-app-menu-icon', this._updateAppMenuVisibility.bind(this),
+            'changed::show-app-menu-label', this._updateAppMenuVisibility.bind(this),
+            this
+        );
 
         this._updateIconEffect();
         this._updateAppMenuVisibility();
@@ -764,23 +1017,23 @@ export const WackAppMenuButton = GObject.registerClass({
             this._iconBox.style = 'margin-right: 4px; -st-icon-style: symbolic';
         }
     }
-    
+
     _updateAppMenuVisibility() {
-    const showIcon = this._settings.get_boolean('show-app-menu-icon');
-    const showLabel = this._settings.get_boolean('show-app-menu-label');
+        const showIcon = this._settings.get_boolean('show-app-menu-icon');
+        const showLabel = this._settings.get_boolean('show-app-menu-label');
 
-    if (showIcon) {
-        this._iconBox.show();
-    } else {
-        this._iconBox.hide();
-    }
+        if (showIcon) {
+            this._iconBox.show();
+        } else {
+            this._iconBox.hide();
+        }
 
-    if (showLabel) {
-        this._label.show();
-    } else {
-        this._label.hide();
+        if (showLabel) {
+            this._label.show();
+        } else {
+            this._label.hide();
+        }
     }
-}
 
 
     destroy() {
@@ -1059,7 +1312,7 @@ export class QuickSettingsPowerManager {
             return children.filter(c => {
                 const typeName = c.constructor.name || '';
                 return typeName === 'LockItem' || typeName === 'ShutdownItem' ||
-                       c._systemActions !== undefined || c.menu !== undefined;
+                    c._systemActions !== undefined || c.menu !== undefined;
             });
         } catch (e) {
             console.error('WACK Shell: Failed to locate Quick Settings power items', e);

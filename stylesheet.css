@@ -57,3 +57,11 @@
 #panel.panel-bigsur {
   background-color: transparent !important;
 }
+
+/* Shortcut hint styling in Logo Menu */
+.wack-logo-menu-shortcut {
+  /* font-size: 0.88em; */
+  font-weight: normal;
+  color: rgba(255, 255, 255, 0.35);
+  margin-left: 24px;
+}
