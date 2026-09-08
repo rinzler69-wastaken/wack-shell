@@ -60,8 +60,47 @@
 
 /* Shortcut hint styling in Logo Menu */
 .wack-logo-menu-shortcut {
-  /* font-size: 0.88em; */
   font-weight: normal;
-  color: rgba(255, 255, 255, 0.35);
   margin-left: 24px;
+  transition-duration: 100ms;
+}
+
+/* Dark theme default (dimmed translucent white) */
+.wack-logo-menu-shortcut,
+.wack-logo-menu-shortcut.dark-theme {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Light theme default (dimmed translucent dark) */
+.wack-logo-menu-shortcut.light-theme {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+/* Hovered / selected / active states: crisp full-contrast text */
+.popup-menu-item:hover .wack-logo-menu-shortcut,
+.popup-menu-item:active .wack-logo-menu-shortcut,
+.popup-menu-item:selected .wack-logo-menu-shortcut,
+.popup-menu-item:focus .wack-logo-menu-shortcut,
+.wack-logo-menu-shortcut:hover,
+.wack-logo-menu-shortcut:active,
+.wack-logo-menu-shortcut:selected,
+.wack-logo-menu-shortcut.highlighted {
+  color: inherit !important;
+  opacity: 1.0 !important;
+}
+
+.popup-menu-item:hover .wack-logo-menu-shortcut.dark-theme,
+.popup-menu-item:active .wack-logo-menu-shortcut.dark-theme,
+.popup-menu-item:selected .wack-logo-menu-shortcut.dark-theme,
+.wack-logo-menu-shortcut.dark-theme.highlighted {
+  color: #ffffff !important;
+  opacity: 1.0 !important;
+}
+
+.popup-menu-item:hover .wack-logo-menu-shortcut.light-theme,
+.popup-menu-item:active .wack-logo-menu-shortcut.light-theme,
+.popup-menu-item:selected .wack-logo-menu-shortcut.light-theme,
+.wack-logo-menu-shortcut.light-theme.highlighted {
+  color: inherit !important;
+  opacity: 1.0 !important;
 }

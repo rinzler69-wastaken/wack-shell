@@ -27,22 +27,57 @@ const BUTTON_DND_ACTIVATION_TIMEOUT = 500;
 const { clamp } = Constants;
 
 // Custom MenuItem class registered once at module load
+function isDarkTheme() {
+    try {
+        const interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+        return interfaceSettings.get_string('color-scheme') === 'prefer-dark';
+    } catch (e) {
+        return true;
+    }
+}
+
 export const LogoMenuItem = GObject.registerClass(
     class WackLogoMenuItem extends PopupMenu.PopupMenuItem {
-        _init(name, activateFunction, shortcut = null) {
+        _init(name, activateFunction, shortcut = null, isDark = null) {
             super._init(name);
             this.connect('activate', activateFunction);
 
             if (shortcut) {
+                const dark = isDark !== null ? isDark : isDarkTheme();
+                const themeClass = dark ? 'dark-theme' : 'light-theme';
                 this._shortcutLabel = new St.Label({
                     text: shortcut,
-                    style_class: 'wack-logo-menu-shortcut',
+                    style_class: `wack-logo-menu-shortcut ${themeClass}`,
                     y_align: Clutter.ActorAlign.CENTER,
                     x_align: Clutter.ActorAlign.END,
                     x_expand: true,
                 });
                 this.add_child(this._shortcutLabel);
+
+                const updateHoverState = () => {
+                    const active = Boolean(this.hover || this.active);
+                    if (active) {
+                        this._shortcutLabel.add_style_pseudo_class('hover');
+                        this._shortcutLabel.add_style_pseudo_class('selected');
+                        this._shortcutLabel.add_style_class_name('highlighted');
+                    } else {
+                        this._shortcutLabel.remove_style_pseudo_class('hover');
+                        this._shortcutLabel.remove_style_pseudo_class('selected');
+                        this._shortcutLabel.remove_style_class_name('highlighted');
+                    }
+                };
+
+                this.connectObject(
+                    'notify::hover', updateHoverState,
+                    'notify::active', updateHoverState,
+                    this
+                );
             }
+        }
+
+        destroy() {
+            this.disconnectObject(this);
+            super.destroy();
         }
     });
 
@@ -472,6 +507,14 @@ export const WackLogoButton = GObject.registerClass(
                 console.error('Failed to monitor media-keys settings:', e);
             }
 
+            // Monitor color-scheme settings for light/dark theme awareness
+            try {
+                this._interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+                this._interfaceSettings.connectObject('changed::color-scheme', () => this._displayMenuItems(), this);
+            } catch (e) {
+                console.error('Failed to monitor interface color-scheme settings:', e);
+            }
+
             this._updateIcon();
             this._updateIconSize();
             this._updateLabel();
@@ -616,6 +659,7 @@ export const WackLogoButton = GObject.registerClass(
             const shortcutSource = this._settings.get_int('menu-shortcut-source');
             const shortcutAmount = this._settings.get_int('menu-shortcut-amount');
             const isMac = isMacStyle(this._settings);
+            const isDark = isDarkTheme();
 
             const getShortcut = (action) => {
                 if (!showShortcuts) return null;
@@ -653,7 +697,7 @@ export const WackLogoButton = GObject.registerClass(
 
             this.menu.addMenuItem(new LogoMenuItem(_('System Settings...'), () => {
                 Util.spawn(['gnome-control-center']);
-            }, getShortcut('settings')));
+            }, getShortcut('settings'), isDark));
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -674,11 +718,11 @@ export const WackLogoButton = GObject.registerClass(
 
             this.menu.addMenuItem(new LogoMenuItem(_('System Monitor'), () => {
                 Util.trySpawnCommandLine(this._settings.get_string('menu-button-system-monitor'));
-            }, getShortcut('system-monitor')));
+            }, getShortcut('system-monitor'), isDark));
 
             this.menu.addMenuItem(new LogoMenuItem(_('Terminal'), () => {
                 Util.trySpawnCommandLine(this._settings.get_string('menu-button-terminal'));
-            }, getShortcut('terminal')));
+            }, getShortcut('terminal'), isDark));
 
             this.menu.addMenuItem(new LogoMenuItem(_('Extensions'), () => {
                 const appSys = Shell.AppSystem.get_default();
@@ -691,7 +735,7 @@ export const WackLogoButton = GObject.registerClass(
                         console.error(e);
                     }
                 }
-            }, getShortcut('extensions')));
+            }, getShortcut('extensions'), isDark));
 
 
 
@@ -707,10 +751,10 @@ export const WackLogoButton = GObject.registerClass(
                 }));
                 this.menu.addMenuItem(new LogoMenuItem(_('Restart...'), () => {
                     SystemActions.getDefault().activateRestart();
-                }, getShortcut('restart')));
+                }, getShortcut('restart'), isDark));
                 this.menu.addMenuItem(new LogoMenuItem(_('Shut Down...'), () => {
                     SystemActions.getDefault().activatePowerOff();
-                }, getShortcut('shutdown')));
+                }, getShortcut('shutdown'), isDark));
 
                 // Separator line between Power and Session options
                 this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -718,7 +762,7 @@ export const WackLogoButton = GObject.registerClass(
                 // Session controls
                 this.menu.addMenuItem(new LogoMenuItem(_('Lock Screen'), () => {
                     SystemActions.getDefault().activateLockScreen();
-                }, getShortcut('lock-screen')));
+                }, getShortcut('lock-screen'), isDark));
                 this.menu.addMenuItem(new LogoMenuItem(_('Switch User...'), () => {
                     SystemActions.getDefault().activateSwitchUser();
                 }));
@@ -727,7 +771,7 @@ export const WackLogoButton = GObject.registerClass(
                 const logoutLabel = username ? `${_('Log Out')} ${username}...` : _('Log Out...');
                 this.menu.addMenuItem(new LogoMenuItem(logoutLabel, () => {
                     SystemActions.getDefault().activateLogout();
-                }, getShortcut('logout')));
+                }, getShortcut('logout'), isDark));
             }
         }
 
@@ -764,6 +808,10 @@ export const WackLogoButton = GObject.registerClass(
             if (this._mediaKeysSettings) {
                 this._mediaKeysSettings.disconnectObject(this);
                 this._mediaKeysSettings = null;
+            }
+            if (this._interfaceSettings) {
+                this._interfaceSettings.disconnectObject(this);
+                this._interfaceSettings = null;
             }
             if (this._xdndTimeOut) {
                 GLib.source_remove(this._xdndTimeOut);
