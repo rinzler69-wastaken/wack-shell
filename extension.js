@@ -16,7 +16,7 @@ import {
     WackWorkspaceButton,
     QuickSettingsPowerManager
 } from './panelComponents.js';
-import VibrancyManager from './vibrancyManager.js';
+import PanelStateManager from './panelStateManager.js';
 import { APP_GRID_WORKSPACE_RATIO, APP_GRID_WORKSPACE_FADE_RANGE, APP_GRID_WORKSPACE_FADE_SNAP } from './constants.js';
 
 const PowerProfilesIface = `<node>
@@ -35,6 +35,7 @@ export default class WackShellExtension extends Extension {
         this._settings = this.getSettings();
         this._clearSnapshotsTimeoutId = 0;
         this.lastPanelStateIsProximity = false;
+        this._proximityBeforeRedrawId = 0;
         this._dockActors = [];
         this._dockSignalIds = [];
         this._dockSnapshotTimeoutId = 0;
@@ -73,14 +74,14 @@ export default class WackShellExtension extends Extension {
         this._sessionModeOwner = {};
         Main.sessionMode.connectObject('updated', () => this._syncSessionModeUI(), this._sessionModeOwner);
 
-this._settings.connectObject(
-    'changed::show-logo-menu', () => this._syncLogoMenu(),
-    'changed::show-workspace-widget', () => this._syncWorkspaceWidget(),
-    'changed::show-app-menu', () => this._syncAppMenu(),
-    'changed::show-app-menu-icon', () => this._appMenuButton?._updateAppMenuVisibility(),
-    'changed::show-app-menu-label', () => this._appMenuButton?._updateAppMenuVisibility(),
-    this
-);
+        this._settings.connectObject(
+            'changed::show-logo-menu', () => this._syncLogoMenu(),
+            'changed::show-workspace-widget', () => this._syncWorkspaceWidget(),
+            'changed::show-app-menu', () => this._syncAppMenu(),
+            'changed::show-app-menu-icon', () => this._appMenuButton?._updateAppMenuVisibility(),
+            'changed::show-app-menu-label', () => this._appMenuButton?._updateAppMenuVisibility(),
+            this
+        );
 
         this._syncLogoMenu();
         this._syncWorkspaceWidget();
@@ -88,8 +89,34 @@ this._settings.connectObject(
         this._initProximity();
 
         // Initialize and enable VibrancyManager
-        this._vibrancyManager = new VibrancyManager(this, this._settings);
-        this._vibrancyManager.enable();
+        this._panelStateManager = new PanelStateManager(this, this._settings);
+        this._panelStateManager.enable();
+
+        // Proximity tracking is initialized before VibrancyManager so it can
+        // observe windows during startup. Re-evaluate once the visual manager
+        // exists; otherwise a proximity=false startup can leave the panel in
+        // an unstyled state because the earlier evaluation had no manager to
+        // paint vibrancy with.
+        this._updatePanelVisibility();
+
+        // Cold boot can race panel allocation, wallpaper cache completion, and
+        // the first session-mode update. The manager already performs its
+        // immediate/idle passes; this extra reassertion is deliberately a
+        // visual sync only, not a proximity debounce.
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            if (this._panelStateManager && !this._panelStateManager?.panelVisualsSuppressed &&
+                !Main.overview.visibleTarget &&
+                !(Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows))
+                this._panelStateManager.setPanelState(this._getDesiredPanelState());
+            return GLib.SOURCE_REMOVE;
+        });
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 750, () => {
+            if (this._panelStateManager && !this._panelStateManager?.panelVisualsSuppressed &&
+                !Main.overview.visible && !Main.overview.visibleTarget &&
+                !(Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows))
+                this._updatePanelVisibility();
+            return GLib.SOURCE_REMOVE;
+        });
 
         // Initialize QuickSettings power controls manager
         this._qsPowerManager = new QuickSettingsPowerManager(this);
@@ -193,11 +220,13 @@ this._settings.connectObject(
 
         this._destroyProximityTracking();
         this._unloadProximityStylesheet();
-        this._clearPanelStyle();
-
         if (this._queuedUpdateId) {
             GLib.source_remove(this._queuedUpdateId);
             this._queuedUpdateId = null;
+        }
+        if (this._proximityBeforeRedrawId) {
+            Meta.later_remove(this._proximityBeforeRedrawId);
+            this._proximityBeforeRedrawId = 0;
         }
 
         if (this._clearSnapshotsTimeoutId) {
@@ -206,9 +235,9 @@ this._settings.connectObject(
         }
 
         // Disable VibrancyManager
-        if (this._vibrancyManager) {
-            this._vibrancyManager.disable();
-            this._vibrancyManager = null;
+        if (this._panelStateManager) {
+            this._panelStateManager.disable();
+            this._panelStateManager = null;
         }
 
         if (this._qsPowerManager) {
@@ -263,28 +292,28 @@ this._settings.connectObject(
 
         this._disconnectDockSnapshotWatchers();
 
-if (this._dockSnapshotTimeoutId) {
-    GLib.source_remove(
-        this._dockSnapshotTimeoutId
-    );
-    this._dockSnapshotTimeoutId = 0;
-}
+        if (this._dockSnapshotTimeoutId) {
+            GLib.source_remove(
+                this._dockSnapshotTimeoutId
+            );
+            this._dockSnapshotTimeoutId = 0;
+        }
 
-if (this._dockDiscoveryTimeoutId) {
-    GLib.source_remove(
-        this._dockDiscoveryTimeoutId
-    );
-    this._dockDiscoveryTimeoutId = 0;
-}
+        if (this._dockDiscoveryTimeoutId) {
+            GLib.source_remove(
+                this._dockDiscoveryTimeoutId
+            );
+            this._dockDiscoveryTimeoutId = 0;
+        }
 
-this._dockActors = [];
+        this._dockActors = [];
 
-if (global.wackDockSnapshots) {
-    for (const snapshot of global.wackDockSnapshots)
-        snapshot.content = null;
+        if (global.wackDockSnapshots) {
+            for (const snapshot of global.wackDockSnapshots)
+                snapshot.content = null;
 
-    global.wackDockSnapshots = [];
-}
+            global.wackDockSnapshots = [];
+        }
     }
 
     // ── Lockscreen Wallpaper Desktop Menu ────────────────────────────────────
@@ -475,21 +504,21 @@ if (global.wackDockSnapshots) {
     }
 
     _findActorsByName(root, name, results = []) {
-    if (!root)
+        if (!root)
+            return results;
+
+        try {
+            if (root.name === name)
+                results.push(root);
+
+            for (const child of root.get_children())
+                this._findActorsByName(child, name, results);
+        } catch (e) {
+            // Actor may have been destroyed while traversing.
+        }
+
         return results;
-
-    try {
-        if (root.name === name)
-            results.push(root);
-
-        for (const child of root.get_children())
-            this._findActorsByName(child, name, results);
-    } catch (e) {
-        // Actor may have been destroyed while traversing.
     }
-
-    return results;
-}
 
     _cachePanelHandoffState() {
         const currentClasses = Main.panel.get_style_class_name() || '';
@@ -517,17 +546,17 @@ if (global.wackDockSnapshots) {
 
         if (this._settings) {
             let blurMode = this._settings.get_int('vibrancy-blur-mode');
-            if (blurMode === 3 && this._vibrancyManager) {
-                blurMode = this._vibrancyManager._isWallpaperLenient() ? 2 : 1;
+            if (blurMode === 3 && this._panelStateManager) {
+                blurMode = this._panelStateManager._isWallpaperLenient() ? 2 : 1;
             }
             global.wack_panel_cached_blur_mode = (blurMode === 1 || blurMode === 2) ? blurMode : 1;
 
             const isDark = this._desktopSettings?.get_string('color-scheme') === 'prefer-dark';
             const style = this._settings.get_int('vibrancy-style');
-            const borrowVenturaLight = this._vibrancyManager ? this._vibrancyManager._getBorrowVenturaLight() : false;
+            const borrowVenturaLight = this._panelStateManager ? this._panelStateManager._getBorrowVenturaLight() : false;
             const useVenturaLight = (style === 2 || borrowVenturaLight) && !isDark;
             const effectiveStyle = useVenturaLight ? 2 : 1;
-            const bmsConflict = this._vibrancyManager ? this._vibrancyManager._bmsHasPanelBlur() : false;
+            const bmsConflict = this._panelStateManager ? this._panelStateManager._bmsHasPanelBlur() : false;
             let brightness = 1.0;
             if (!bmsConflict) {
                 brightness = (effectiveStyle === 2) ? 0.80 : (isDark ? 0.90 : 0.95);
@@ -703,61 +732,61 @@ if (global.wackDockSnapshots) {
         }
     }
 
-_setupDockSnapshots() {
-    const extension =
-        Main.extensionManager.lookup(
-            'dash-to-dock@micxgx.gmail.com'
-        );
-
-    if (!extension || extension.state !== 1) {
-        console.log('[Wack Shell] Dash to Dock not enabled');
-        return;
-    }
-
-    console.log('[Wack Shell] Dash to Dock detected');
-
-    const findDock = () => {
-        const docks = this._findActorsByName(
-            global.stage,
-            'dashtodockContainer'
-        );
-
-        if (docks.length === 0) {
-            console.log(
-                '[Wack Shell] Waiting for Dash to Dock actor...'
+    _setupDockSnapshots() {
+        const extension =
+            Main.extensionManager.lookup(
+                'dash-to-dock@micxgx.gmail.com'
             );
 
-            return GLib.SOURCE_CONTINUE;
+        if (!extension || extension.state !== 1) {
+            console.log('[Wack Shell] Dash to Dock not enabled');
+            return;
         }
 
-        this._dockDiscoveryTimeoutId = 0;
+        console.log('[Wack Shell] Dash to Dock detected');
 
-        console.log(
-            `[Wack Shell] Found ${docks.length} live dock actor(s)`
-        );
-
-        this._dockActors = docks;
-
-        this._connectDockSnapshotWatchers();
-
-        // Initial snapshot immediately while fully unlocked.
-        this._scheduleDockSnapshot();
-
-        return GLib.SOURCE_REMOVE;
-    };
-
-    // Try immediately first.
-    const result = findDock();
-
-    if (result === GLib.SOURCE_CONTINUE) {
-        this._dockDiscoveryTimeoutId =
-            GLib.timeout_add(
-                GLib.PRIORITY_DEFAULT,
-                500,
-                findDock
+        const findDock = () => {
+            const docks = this._findActorsByName(
+                global.stage,
+                'dashtodockContainer'
             );
+
+            if (docks.length === 0) {
+                console.log(
+                    '[Wack Shell] Waiting for Dash to Dock actor...'
+                );
+
+                return GLib.SOURCE_CONTINUE;
+            }
+
+            this._dockDiscoveryTimeoutId = 0;
+
+            console.log(
+                `[Wack Shell] Found ${docks.length} live dock actor(s)`
+            );
+
+            this._dockActors = docks;
+
+            this._connectDockSnapshotWatchers();
+
+            // Initial snapshot immediately while fully unlocked.
+            this._scheduleDockSnapshot();
+
+            return GLib.SOURCE_REMOVE;
+        };
+
+        // Try immediately first.
+        const result = findDock();
+
+        if (result === GLib.SOURCE_CONTINUE) {
+            this._dockDiscoveryTimeoutId =
+                GLib.timeout_add(
+                    GLib.PRIORITY_DEFAULT,
+                    500,
+                    findDock
+                );
+        }
     }
-}
 
     _clearWindowSnapshots() {
         if (this._clearSnapshotsTimeoutId) {
@@ -770,7 +799,7 @@ _setupDockSnapshots() {
         }
         global.wack_window_snapshots = [];
     }
-        
+
 
     _cacheWindowTextures() {
         this._clearWindowSnapshots();
@@ -822,128 +851,128 @@ _setupDockSnapshots() {
         });
     }
 
-_cacheDockSnapshots() {
-    if (!this._dockActors?.length)
-        return;
+    _cacheDockSnapshots() {
+        if (!this._dockActors?.length)
+            return;
 
-    const snapshots = [];
+        const snapshots = [];
 
-    for (const dock of this._dockActors) {
-        try {
-            if (!dock || dock.is_destroyed?.())
-                continue;
-
-            const [x, y] =
-                dock.get_transformed_position();
-
-            const [width, height] =
-                dock.get_transformed_size();
-
-            if (width <= 0 || height <= 0)
-                continue;
-
-            const content =
-                dock.paint_to_content(null);
-
-            if (!content)
-                continue;
-
-            snapshots.push({
-                content,
-                x: Math.round(x),
-                y: Math.round(y),
-                width: Math.round(width),
-                height: Math.round(height),
-            });
-
-            console.log(
-                `[Wack Shell] Cached live dock snapshot ` +
-                `${Math.round(width)}x${Math.round(height)} ` +
-                `at ${Math.round(x)},${Math.round(y)}`
-            );
-        } catch (e) {
-            console.error(
-                `[Wack Shell] Dock snapshot failed: ${e}`
-            );
-        }
-    }
-
-    // Important:
-    // Only replace a valid existing cache if capture succeeded.
-    if (snapshots.length > 0) {
-        global.wackDockSnapshots = snapshots;
-
-        console.log(
-            `[Wack Shell] Updated dock cache: ` +
-            `${snapshots.length} snapshot(s)`
-        );
-    }
-}
-
-_scheduleDockSnapshot() {
-    if (this._dockSnapshotTimeoutId) {
-        GLib.source_remove(
-            this._dockSnapshotTimeoutId
-        );
-    }
-
-    this._dockSnapshotTimeoutId =
-        GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT,
-            100,
-            () => {
-                this._dockSnapshotTimeoutId = 0;
-
-                this._cacheDockSnapshots();
-
-                return GLib.SOURCE_REMOVE;
-            }
-        );
-}
-
-_connectDockSnapshotWatchers() {
-    this._disconnectDockSnapshotWatchers();
-
-    for (const dock of this._dockActors) {
-        const connect = signal => {
+        for (const dock of this._dockActors) {
             try {
-                const id = dock.connect(
-                    signal,
-                    () => this._scheduleDockSnapshot()
-                );
+                if (!dock || dock.is_destroyed?.())
+                    continue;
 
-                this._dockSignalIds.push({
-                    actor: dock,
-                    id,
+                const [x, y] =
+                    dock.get_transformed_position();
+
+                const [width, height] =
+                    dock.get_transformed_size();
+
+                if (width <= 0 || height <= 0)
+                    continue;
+
+                const content =
+                    dock.paint_to_content(null);
+
+                if (!content)
+                    continue;
+
+                snapshots.push({
+                    content,
+                    x: Math.round(x),
+                    y: Math.round(y),
+                    width: Math.round(width),
+                    height: Math.round(height),
                 });
+
+                console.log(
+                    `[Wack Shell] Cached live dock snapshot ` +
+                    `${Math.round(width)}x${Math.round(height)} ` +
+                    `at ${Math.round(x)},${Math.round(y)}`
+                );
             } catch (e) {
                 console.error(
-                    `[Wack Shell] Could not watch ` +
-                    `${signal}: ${e}`
+                    `[Wack Shell] Dock snapshot failed: ${e}`
                 );
             }
-        };
+        }
 
-        connect('notify::allocation');
-        connect('notify::visible');
-    }
+        // Important:
+        // Only replace a valid existing cache if capture succeeded.
+        if (snapshots.length > 0) {
+            global.wackDockSnapshots = snapshots;
 
-    console.log(
-        '[Wack Shell] Dock snapshot watchers connected'
-    );
-}
-
-_disconnectDockSnapshotWatchers() {
-    for (const {actor, id} of this._dockSignalIds) {
-        try {
-            actor.disconnect(id);
-        } catch (e) {
-            // Actor may already be destroyed.
+            console.log(
+                `[Wack Shell] Updated dock cache: ` +
+                `${snapshots.length} snapshot(s)`
+            );
         }
     }
 
-    this._dockSignalIds = [];
-}
+    _scheduleDockSnapshot() {
+        if (this._dockSnapshotTimeoutId) {
+            GLib.source_remove(
+                this._dockSnapshotTimeoutId
+            );
+        }
+
+        this._dockSnapshotTimeoutId =
+            GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT,
+                100,
+                () => {
+                    this._dockSnapshotTimeoutId = 0;
+
+                    this._cacheDockSnapshots();
+
+                    return GLib.SOURCE_REMOVE;
+                }
+            );
+    }
+
+    _connectDockSnapshotWatchers() {
+        this._disconnectDockSnapshotWatchers();
+
+        for (const dock of this._dockActors) {
+            const connect = signal => {
+                try {
+                    const id = dock.connect(
+                        signal,
+                        () => this._scheduleDockSnapshot()
+                    );
+
+                    this._dockSignalIds.push({
+                        actor: dock,
+                        id,
+                    });
+                } catch (e) {
+                    console.error(
+                        `[Wack Shell] Could not watch ` +
+                        `${signal}: ${e}`
+                    );
+                }
+            };
+
+            connect('notify::allocation');
+            connect('notify::visible');
+        }
+
+        console.log(
+            '[Wack Shell] Dock snapshot watchers connected'
+        );
+    }
+
+    _disconnectDockSnapshotWatchers() {
+        for (const { actor, id } of this._dockSignalIds) {
+            try {
+                actor.disconnect(id);
+            } catch (e) {
+                // Actor may already be destroyed.
+            }
+        }
+
+        this._dockSignalIds = [];
+    }
 
 
     _destroyWindowCache(preserveSnapshots = false) {
@@ -1187,10 +1216,11 @@ _disconnectDockSnapshotWatchers() {
         );
 
         this._desktopSettings.connectObject(
-            'changed::color-scheme', () => this._updateProximityStylesheet(),
+            'changed::color-scheme', () => this._syncProximityColorMode(),
             this
         );
 
+        this._connectPanelVisualSuppressionSignals();
         this._syncProximity();
     }
 
@@ -1203,14 +1233,70 @@ _disconnectDockSnapshotWatchers() {
             GLib.source_remove(this._queuedUpdateId);
             this._queuedUpdateId = null;
         }
+        if (this._proximityBeforeRedrawId) {
+            Meta.later_remove(this._proximityBeforeRedrawId);
+            this._proximityBeforeRedrawId = 0;
+        }
 
+        // Overview/lockscreen suppression belongs to panel visuals, not to
+        // proximity detection. These signals therefore remain connected even
+        // when proximity itself is disabled.
         if (enabled) {
             this._updateProximityStylesheet();
             this._connectProximitySignals();
         } else {
             this._unloadProximityStylesheet();
-            this._clearPanelStyle();
+            this._updatePanelVisibility();
         }
+    }
+
+    _connectPanelVisualSuppressionSignals() {
+        Main.overview.connectObject(
+            'showing', () => this._updatePanelVisibility(),
+            'hiding', () => this._updatePanelVisibility(),
+            'hidden', () => {
+                this._updatePanelVisibility();
+                if (this._proximityBeforeRedrawId)
+                    Meta.later_remove(this._proximityBeforeRedrawId);
+                this._proximityBeforeRedrawId = Meta.later_add(
+                    Meta.LaterType.BEFORE_REDRAW,
+                    () => {
+                        this._proximityBeforeRedrawId = 0;
+                        this._updatePanelVisibility();
+                        return GLib.SOURCE_REMOVE;
+                    }
+                );
+            },
+            'notify::visible', () => {
+                this._updatePanelVisibility();
+                if (!Main.overview.visible) {
+                    if (this._proximityBeforeRedrawId)
+                        Meta.later_remove(this._proximityBeforeRedrawId);
+                    this._proximityBeforeRedrawId = Meta.later_add(
+                        Meta.LaterType.BEFORE_REDRAW,
+                        () => {
+                            this._proximityBeforeRedrawId = 0;
+                            this._updatePanelVisibility();
+                            return GLib.SOURCE_REMOVE;
+                        }
+                    );
+                }
+            },
+            this
+        );
+
+        Main.sessionMode.connectObject(
+            'updated', () => this._updatePanelVisibility(),
+            this
+        );
+
+        // The unlock-dialog session can outlive the actual screen-shield
+        // transition by a few frames.  Listen to the shield itself so panel
+        // visuals are released as soon as the lockscreen is genuinely gone.
+        Main.screenShield?.connectObject(
+            'active-changed', () => this._updatePanelVisibility(),
+            this
+        );
     }
 
     _connectProximitySignals() {
@@ -1226,18 +1312,6 @@ _disconnectDockSnapshotWatchers() {
 
         global.window_manager.connectObject(
             'switch-workspace', () => this._queueUpdatePanelVisibility(),
-            this
-        );
-
-        Main.overview.connectObject(
-            'showing', () => this._updatePanelVisibility(),
-            'hiding', () => this._updatePanelVisibility(),
-            'hidden', () => this._updatePanelVisibility(),
-            this
-        );
-
-        Main.sessionMode.connectObject(
-            'updated', () => this._updatePanelVisibility(),
             this
         );
 
@@ -1282,9 +1356,6 @@ _disconnectDockSnapshotWatchers() {
     _destroyProximityTracking() {
         global.window_group.disconnectObject(this);
         global.window_manager.disconnectObject(this);
-        Main.overview.disconnectObject(this);
-        Main.sessionMode.disconnectObject(this);
-
         if (this._proximityWindowSignals) {
             for (const [, signals] of this._proximityWindowSignals) {
                 signals.forEach(sig => {
@@ -1308,6 +1379,21 @@ _disconnectDockSnapshotWatchers() {
         return this._desktopSettings.get_string('color-scheme') === 'prefer-dark';
     }
 
+    _syncProximityColorMode() {
+        const isDark = this._isProximityDarkMode();
+        // The painted proximity surface is independent of the stylesheet.
+        // Switch its colour immediately as well; there is deliberately no
+        // asynchronous theme round-trip involved in a light/dark toggle.
+        const bg = this._settings.get_string(isDark ? 'dark-bg-color' : 'light-bg-color').replace(/'/g, '');
+        const fg = this._settings.get_string(isDark ? 'dark-fg-color' : 'light-fg-color').replace(/'/g, '');
+        global.wack_proximity_bg = bg;
+        global.wack_proximity_fg = fg;
+        this._panelStateManager?.updatePanelProximityColor(bg);
+
+        if (this._panelStateManager?.desiredPanelState === 'proximity' && !this._panelStateManager?.panelVisualsSuppressed)
+            this._panelStateManager?.setPanelState('proximity');
+    }
+
     _updateProximityStylesheet() {
         if (this._proximityWriteCancellable) {
             this._proximityWriteCancellable.cancel();
@@ -1316,63 +1402,74 @@ _disconnectDockSnapshotWatchers() {
 
         this._unloadProximityStylesheet();
 
-        if (!this._settings.get_boolean('enable-panel-proximity')) {
+        if (!this._settings.get_boolean('enable-panel-proximity'))
             return;
-        }
+
+        const lightBg = this._settings.get_string('light-bg-color').replace(/'/g, '');
+        const lightFg = this._settings.get_string('light-fg-color').replace(/'/g, '');
+        const darkBg = this._settings.get_string('dark-bg-color').replace(/'/g, '');
+        const darkFg = this._settings.get_string('dark-fg-color').replace(/'/g, '');
 
         const isDark = this._isProximityDarkMode();
-        const bg = this._settings.get_string(isDark ? 'dark-bg-color' : 'light-bg-color');
-        const fg = this._settings.get_string(isDark ? 'dark-fg-color' : 'light-fg-color');
+        const bg = isDark ? darkBg : lightBg;
+        const fg = isDark ? darkFg : lightFg;
 
-        const bgCss = bg.replace(/'/g, '');
-        const fgCss = fg.replace(/'/g, '');
+        global.wack_proximity_bg = bg;
+        global.wack_proximity_fg = fg;
+        this._panelStateManager?.updatePanelProximityColor(bg);
 
-        global.wack_proximity_bg = bgCss;
-        global.wack_proximity_fg = fgCss;
-
+        // Generate both colour modes once. A color-scheme change then becomes
+        // a synchronous class swap rather than an unload/write/load cycle.
+        // That removes the transient unstyled-panel window during Overview
+        // return and makes light/dark behave like the V/P state switch itself.
         const cssString = `
-#panel.panel-proximity {
-    background-color: ${bgCss} !important;
-    transition-duration: 250ms;
+#panel.panel-proximity-light {
+    background-color: transparent !important;
+    background-image: none !important;
+}
+#panel.panel-proximity-dark {
+    background-color: transparent !important;
+    background-image: none !important;
 }
 
-#panel.panel-proximity,
-#panel.panel-proximity *,
-#panel.panel-proximity .panel-button,
-#panel.panel-proximity .panel-button * {
-    color: ${fgCss} !important;
+#panel.panel-proximity-light,
+#panel.panel-proximity-light *,
+#panel.panel-proximity-light .panel-button,
+#panel.panel-proximity-light .panel-button * {
+    color: ${lightFg} !important;
+}
+#panel.panel-proximity-dark,
+#panel.panel-proximity-dark *,
+#panel.panel-proximity-dark .panel-button,
+#panel.panel-proximity-dark .panel-button * {
+    color: ${darkFg} !important;
 }
 
-#panel.panel-proximity .system-status-icon,
-#panel.panel-proximity .app-menu-icon,
-#panel.panel-proximity .popup-menu-arrow {
-    color: ${fgCss} !important;
+#panel.panel-proximity-light .system-status-icon,
+#panel.panel-proximity-light .app-menu-icon,
+#panel.panel-proximity-light .popup-menu-arrow,
+#panel.panel-proximity-dark .system-status-icon,
+#panel.panel-proximity-dark .app-menu-icon,
+#panel.panel-proximity-dark .popup-menu-arrow {
+    color: ${isDark ? darkFg : lightFg} !important;
 }
 
-#panel.panel-proximity .workspace-dot {
+#panel.panel-proximity-light .workspace-dot,
+#panel.panel-proximity-dark .workspace-dot {
     border-radius: 999px;
-    background-color: ${fgCss} !important;
 }
+#panel.panel-proximity-light .workspace-dot { background-color: ${lightFg} !important; }
+#panel.panel-proximity-dark .workspace-dot { background-color: ${darkFg} !important; }
 `;
         const bytes = new TextEncoder().encode(cssString);
-
         const cancellable = new Gio.Cancellable();
         this._proximityWriteCancellable = cancellable;
         const requestToken = ++this._proximityRequestToken;
 
         this._customCssFile.replace_contents_async(
-            bytes,
-            null,
-            false,
-            Gio.FileCreateFlags.NONE,
-            cancellable,
+            bytes, null, false, Gio.FileCreateFlags.NONE, cancellable,
             (file, res) => {
-                try {
-                    file.replace_contents_finish(res);
-                } catch {
-                    return;
-                }
-
+                try { file.replace_contents_finish(res); } catch { return; }
                 if (requestToken !== this._proximityRequestToken) return;
                 if (this._proximityWriteCancellable === cancellable)
                     this._proximityWriteCancellable = null;
@@ -1380,6 +1477,7 @@ _disconnectDockSnapshotWatchers() {
 
                 this._themeContext.get_theme().load_stylesheet(this._customCssFile);
                 this._themeId = true;
+                this._syncProximityColorMode();
                 this._queueUpdatePanelVisibility();
             }
         );
@@ -1396,34 +1494,20 @@ _disconnectDockSnapshotWatchers() {
         });
     }
 
-    _updatePanelVisibility() {
-        if (Main.overview.visibleTarget) {
-            this._clearPanelStyle();
-            return;
-        }
+    _getDesiredPanelState() {
+        if (!this._settings.get_boolean('enable-panel-proximity'))
+            return this._settings.get_boolean('enable-vibrancy') ? 'vibrancy' : 'none';
 
-        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows;
-        if (isLockscreen) {
-            this._clearPanelStyle();
-            return;
-        }
-
-        if (!this._settings.get_boolean('enable-panel-proximity')) {
-            this.lastPanelStateIsProximity = false;
-            global.wack_proximity_active = false;
-            this._clearPanelStyle();
-            return;
-        }
-
-        if (!Main.layoutManager.primaryMonitor) return;
+        if (!Main.layoutManager.primaryMonitor)
+            return this._settings.get_boolean('enable-vibrancy') ? 'vibrancy' : 'none';
 
         const workspace = global.workspace_manager.get_active_workspace();
         const windows = workspace.list_windows().filter(meta_window =>
             meta_window.showing_on_its_workspace() &&
             !meta_window.is_hidden() &&
             meta_window.get_window_type() !== Meta.WindowType.DESKTOP &&
-            meta_window.get_gtk_application_id() !== "com.rastersoft.ding" &&
-            meta_window.get_gtk_application_id() !== "com.desktop.ding"
+            meta_window.get_gtk_application_id() !== 'com.rastersoft.ding' &&
+            meta_window.get_gtk_application_id() !== 'com.desktop.ding'
         );
 
         const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
@@ -1431,63 +1515,45 @@ _disconnectDockSnapshotWatchers() {
         const panelTop = panel.get_transformed_position()[1];
         const panelBottom = panelTop + panel.get_height();
 
-        let windowNearPanel = false;
-        windows.forEach(meta_window => {
-            const windowMonitorIndex = meta_window.get_monitor();
-            const sameMonitor = Main.layoutManager.primaryMonitor.index === windowMonitorIndex;
-
-            const windowVerticalPos = meta_window.get_frame_rect().y;
-            const windowVerticalBottom = windowVerticalPos + meta_window.get_frame_rect().height;
-
-            if (sameMonitor &&
-                ((panelTop === 0 && windowVerticalPos < panelBottom + 5 * scale) ||
-                    (panelTop > 0 && windowVerticalBottom > panelTop - 5 * scale))
-            ) {
-                windowNearPanel = true;
-            }
+        const windowNearPanel = windows.some(meta_window => {
+            const sameMonitor = Main.layoutManager.primaryMonitor.index === meta_window.get_monitor();
+            const rect = meta_window.get_frame_rect();
+            return sameMonitor &&
+                ((panelTop === 0 && rect.y < panelBottom + 5 * scale) ||
+                    (panelTop > 0 && rect.y + rect.height > panelTop - 5 * scale));
         });
 
-        if (windowNearPanel) {
-            this.lastPanelStateIsProximity = true;
-            global.wack_proximity_active = true;
-            this._applyPanelStyle();
-        } else {
-            this.lastPanelStateIsProximity = false;
-            global.wack_proximity_active = false;
-            this._clearPanelStyle();
-        }
+        if (windowNearPanel)
+            return 'proximity';
+
+        return this._settings.get_boolean('enable-vibrancy') ? 'vibrancy' : 'none';
     }
 
-    _applyPanelStyle() {
-        Main.panel.add_style_class_name('panel-proximity');
-        Main.panel.remove_style_class_name('light-contrast');
+    _updatePanelVisibility() {
+        const isOverviewSuppressed = Main.overview.visibleTarget;
+        const isLockscreenSuppressed =
+            (Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows) ||
+            Main.screenShield?.active || Main.screenShield?.locked;
 
-        for (const cls of ['panel-ventura-light', 'panel-bigsur']) {
-            Main.panel.remove_style_class_name(cls);
+        if (isOverviewSuppressed || isLockscreenSuppressed) {
+            this._panelStateManager?.setPanelSuppressed(true);
+
+            // Overview may change the active workspace while it is open. Keep
+            // the manager's desired state current without painting anything.
+            // Lockscreen is different: its pre-lock desired state remains the
+            // state to restore after unlock.
+            if (isOverviewSuppressed)
+                this._panelStateManager?.setPanelState(this._getDesiredPanelState());
+            return;
         }
 
-        Main.panel.set_style(null);
+        this._panelStateManager?.setPanelSuppressed(false);
 
-        const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog';
-        const isShieldActive = Main.screenShield && (Main.screenShield.active || Main.screenShield.locked);
-        const isOverview = Main.overview.visible || Main.overview.visibleTarget;
+        const desiredState = this._getDesiredPanelState();
+        this._panelStateManager?.setPanelState(desiredState);
 
-        if (!isLockscreen && !isShieldActive && !isOverview) {
-            global.wack_panel_cached_classes = Main.panel.get_style_class_name() || '';
-            global.wack_panel_cached_style = '';
-            const isDark = this._isProximityDarkMode();
-            const bg = this._settings.get_string(isDark ? 'dark-bg-color' : 'light-bg-color');
-            const fg = this._settings.get_string(isDark ? 'dark-fg-color' : 'light-fg-color');
-            global.wack_panel_cached_proximity_bg = bg.replace(/'/g, '');
-            global.wack_panel_cached_proximity_fg = fg.replace(/'/g, '');
-        }
+        this.lastPanelStateIsProximity = desiredState === 'proximity';
+        global.wack_proximity_active = desiredState === 'proximity';
     }
 
-    _clearPanelStyle() {
-        Main.panel.remove_style_class_name('panel-proximity');
-
-        if (this._vibrancyManager && this._vibrancyManager.vibrancyActive) {
-            this._vibrancyManager.applyVibrancyStyle();
-        }
-    }
 }
