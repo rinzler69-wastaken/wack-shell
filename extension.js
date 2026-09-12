@@ -1332,8 +1332,7 @@ _disconnectDockSnapshotWatchers() {
 
         const cssString = `
 #panel.panel-proximity {
-    background-color: ${bgCss} !important;
-    transition-duration: 250ms;
+    background-color: transparent !important;
 }
 
 #panel.panel-proximity,
@@ -1481,10 +1480,21 @@ _disconnectDockSnapshotWatchers() {
             global.wack_panel_cached_proximity_bg = bg.replace(/'/g, '');
             global.wack_panel_cached_proximity_fg = fg.replace(/'/g, '');
         }
+
+        if (this._vibrancyManager) {
+            const isDark = this._isProximityDarkMode();
+            const bg = this._settings.get_string(isDark ? 'dark-bg-color' : 'light-bg-color').replace(/'/g, '');
+            const fg = this._settings.get_string(isDark ? 'dark-fg-color' : 'light-fg-color').replace(/'/g, '');
+            this._vibrancyManager.setPanelProximity(true, bg, fg);
+        }
     }
 
     _clearPanelStyle() {
         Main.panel.remove_style_class_name('panel-proximity');
+
+        if (this._vibrancyManager) {
+            this._vibrancyManager.setPanelProximity(false);
+        }
 
         if (this._vibrancyManager && this._vibrancyManager.vibrancyActive) {
             this._vibrancyManager.applyVibrancyStyle();
