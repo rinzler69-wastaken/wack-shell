@@ -9,7 +9,7 @@ import { createBlurredPanelStrip } from './wallpaperSampler.js';
 import { resolveWallpaperSource, getFileMtimeAndSize, loadScaledWallpaperPixbuf, getWallpaperFileInfo } from './wallpaperUtils.js';
 import { initCache, saveCache, getCache, setCache, hasCache } from './alphaCache.js';
 
-export const RADIUS_LINEAR = 350;
+export const RADIUS_LINEAR = 400;
 export const RADIUS_LENIENT = 175;
 
 const PANEL_STRIP_SOURCE_HEIGHT = 192;
@@ -47,6 +47,8 @@ export default class VibrancyManager {
         this._proximityAnimationId = 0;
         this._proximityAnimationToken = 0;
         this._proximityPanelColor = null;
+        this._panelVisualsSuppressed = false;
+        this._panelVisualSuppressionToken = 0;
     }
 
     get vibrancyActive() {
@@ -122,8 +124,21 @@ export default class VibrancyManager {
 
 
         this._updateWallpaperColors();
-        this._regeneratePanelStrip();
+        // Do one immediate style pass now, then one idle pass after Shell has
+        // finished the first panel allocation.  On a cold boot the panel can
+        // be constructed before the async wallpaper/cache work completes; the
+        // idle pass makes sure the freshly-created backdrop is painted as soon
+        // as the panel has real dimensions.
+        this._regeneratePanelStrip().then(() => {
+            if (!this._settings) return;
+            this.applyVibrancyStyle();
+        });
         this._syncVibrancy();
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            if (this._settings)
+                this.applyVibrancyStyle();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     disable() {
@@ -179,9 +194,9 @@ export default class VibrancyManager {
         if (this._vibrancyStyleActive) {
             Main.panel.set_style(null);
             this._vibrancyStyleActive = false;
-        this._proximityAnimationId = 0;
-        this._proximityAnimationToken = 0;
-        this._proximityPanelColor = null;
+            this._proximityAnimationId = 0;
+            this._proximityAnimationToken = 0;
+            this._proximityPanelColor = null;
         }
 
         Main.panel.remove_style_class_name('panel-ventura-light');
@@ -278,6 +293,24 @@ export default class VibrancyManager {
                 const hash = GLib.compute_checksum_for_string(GLib.ChecksumType.MD5, cacheKey, -1).substring(0, 8);
                 const path = GLib.build_filenamev([PANEL_CACHE_DIR, `${PANEL_CACHE_PREFIX}${USER_NAME}-${hash}.png`]);
 
+                // Fast path: the deterministic PNG path is itself the cache.
+                // On Shell startup this lets us reuse an already-generated strip
+                // immediately, without depending on the metadata JSON having
+                // been loaded or populated yet.
+                const cacheFile = Gio.File.new_for_path(path);
+                if (cacheFile.query_exists(null)) {
+                    setCache(cacheKey, { imagePath: path });
+                    saveCache();
+                    if (runId === this._updateStripId) {
+                        this._panelStripPath = path;
+                        this._panelStripWidth = stripWidth;
+                        this._panelStripHeight = stripHeight;
+                        this.applyVibrancyStyle();
+                    }
+                    return;
+                }
+
+                // Metadata fallback for cache entries created by older versions.
                 if (hasCache(cacheKey)) {
                     const cached = getCache(cacheKey);
                     if (cached?.imagePath && Gio.File.new_for_path(cached.imagePath).query_exists(null)) {
@@ -332,7 +365,7 @@ export default class VibrancyManager {
                             while ((fileInfo = enumerator.next_file(null)) !== null) {
                                 const name = fileInfo.get_name();
                                 if (name.startsWith(`${PANEL_CACHE_PREFIX}${USER_NAME}-`) && !name.endsWith(currentSuffix)) {
-                                    try { dir.get_child(name).delete(null); } catch (_) {}
+                                    try { dir.get_child(name).delete(null); } catch (_) { }
                                 }
                             }
                             enumerator.close(null);
@@ -691,17 +724,40 @@ export default class VibrancyManager {
         }
     }
 
-    _setPanelBackdropStyle(imagePath) {
+    _setPanelBackdropStyle(imagePath, onSettled = null) {
         const backdrop = this._panelBackdrop;
         if (!backdrop || backdrop.destroyed)
             return;
+
+        // Both directions of this transition (fading the wallpaper backdrop
+        // out as proximity takes over, and back in once proximity is
+        // dismissed) go through here — proximity's early-return in
+        // applyVibrancyStyle() calls this with null, and the normal vibrancy
+        // path below calls it with a path once proximity clears. Animating
+        // opacity here, in one place, keeps both directions symmetric
+        // without any dedicated proximity-specific crossfade logic.
+        const duration = 250;
+        const mode = Clutter.AnimationMode.EASE_OUT_QUAD;
 
         if (!imagePath) {
             if (this._panelBackdropStyle !== null) {
                 backdrop.set_style(null);
                 this._panelBackdropStyle = null;
             }
-            backdrop.hide();
+            if (backdrop.opacity === 0) {
+                backdrop.hide();
+                return;
+            }
+            backdrop.remove_all_transitions();
+            backdrop.ease({
+                opacity: 0,
+                duration,
+                mode,
+                onComplete: () => {
+                    if (!backdrop.destroyed && backdrop.opacity === 0)
+                        backdrop.hide();
+                },
+            });
             return;
         }
 
@@ -728,8 +784,22 @@ export default class VibrancyManager {
         box.set_size(width, height);
         backdrop.allocate(box);
         backdrop.set_clip(0, 0, width, height);
-        backdrop.set_opacity(255);
         backdrop.show();
+
+        if (backdrop.opacity < 255) {
+            backdrop.remove_all_transitions();
+            backdrop.ease({
+                opacity: 255,
+                duration,
+                mode,
+                onComplete: () => {
+                    if (onSettled) onSettled();
+                },
+            });
+        } else {
+            backdrop.set_opacity(255);
+            if (onSettled) onSettled();
+        }
 
         // Keep the backdrop immediately behind the three actual panel boxes.
         // Do not lower it beneath the panel's child stack indiscriminately.
@@ -824,7 +894,7 @@ export default class VibrancyManager {
         return null;
     }
 
-    _setProximityPanelColor(css, alpha) {
+    _setProximityPanelColor(css, alpha = null) {
         const overlay = this._panelProximityOverlay;
         if (!overlay || overlay.destroyed)
             return;
@@ -835,7 +905,17 @@ export default class VibrancyManager {
             overlay.set_style(style);
             this._panelProximityOverlayStyle = style;
         }
-        overlay.set_opacity(Math.round(Math.max(0, Math.min(1, alpha)) * 255));
+
+        // Passing null updates only the colour. This is important when the
+        // desktop switches light/dark mode while proximity is already visible:
+        // changing the colour must not touch the actor opacity or interrupt
+        // an in-progress V<->P transition.
+        if (alpha !== null)
+            overlay.set_opacity(Math.round(Math.max(0, Math.min(1, alpha)) * 255));
+    }
+
+    updatePanelProximityColor(css) {
+        this._setProximityPanelColor(css);
     }
 
     _cancelProximityAnimation() {
@@ -898,42 +978,188 @@ export default class VibrancyManager {
         tick();
     }
 
-    setPanelProximity(active, bgCss, fgCss = null) {
+    suppressPanelVisuals(onSettled = null) {
+        // Visual suppression is generation-based. A fade started by an older
+        // Overview/lockscreen cycle must never be allowed to hide actors that
+        // a newer cycle has already resumed and re-applied.
+        const token = ++this._panelVisualSuppressionToken;
+        this._panelVisualsSuppressed = true;
+        this._cancelProximityAnimation();
+
+        const actors = [this._panelBackdrop, this._panelBackdropOverlay, this._panelProximityOverlay];
+        const duration = 250;
+        const mode = Clutter.AnimationMode.EASE_OUT_QUAD;
+        let remaining = 0;
+        let settled = false;
+
+        const done = () => {
+            if (settled || --remaining > 0)
+                return;
+            settled = true;
+            if (token !== this._panelVisualSuppressionToken || !this._panelVisualsSuppressed)
+                return;
+            for (const actor of actors) {
+                if (actor && !actor.destroyed) {
+                    actor.set_opacity(0);
+                    actor.hide();
+                }
+            }
+            if (onSettled) onSettled();
+        };
+
+        for (const actor of actors) {
+            if (!actor || actor.destroyed)
+                continue;
+            actor.remove_all_transitions();
+            if (actor.opacity > 0) {
+                remaining++;
+                actor.ease({ opacity: 0, duration, mode, onComplete: done });
+            } else {
+                actor.hide();
+            }
+        }
+
+        if (remaining === 0)
+            done();
+    }
+
+    resumePanelVisuals() {
+        // Invalidate every pending suppression completion before releasing the
+        // gate, so an old fade cannot hide the newly-restored V/P layers.
+        ++this._panelVisualSuppressionToken;
+        // Release the visual suppression gate. No state is restored here:
+        // extension.js immediately evaluates the current logical destination
+        // and asks the manager to paint it.
+        this._panelVisualsSuppressed = false;
+        this._cancelProximityAnimation();
+    }
+
+    _animatePanelVisualLayers(vibrancyTarget, proximityTarget, onSettled = null) {
         this._ensurePanelBackdrop();
+        const backdrop = this._panelBackdrop;
+        const proximity = this._panelProximityOverlay;
+        const duration = 250;
+        const mode = Clutter.AnimationMode.EASE_OUT_QUAD;
+        let remaining = 0;
+        let settled = false;
+
+        const done = () => {
+            if (settled || --remaining > 0)
+                return;
+            settled = true;
+            if (backdrop && !backdrop.destroyed && vibrancyTarget === 0)
+                backdrop.hide();
+            if (proximity && !proximity.destroyed && proximityTarget === 0)
+                proximity.hide();
+            if (onSettled) onSettled();
+        };
+
+        if (backdrop && !backdrop.destroyed) {
+            if (vibrancyTarget > 0)
+                backdrop.show();
+            backdrop.remove_all_transitions();
+            if (backdrop.opacity !== vibrancyTarget) {
+                remaining++;
+                backdrop.ease({ opacity: vibrancyTarget, duration, mode, onComplete: done });
+            }
+        }
+
+        if (proximity && !proximity.destroyed) {
+            if (proximityTarget > 0)
+                proximity.show();
+            proximity.remove_all_transitions();
+            if (proximity.opacity !== proximityTarget) {
+                remaining++;
+                proximity.ease({ opacity: proximityTarget, duration, mode, onComplete: done });
+            }
+        }
+
+        if (remaining === 0 && onSettled)
+            onSettled();
+    }
+
+    setPanelProximity(active, onSettled = null) {
+        this._cancelProximityAnimation();
+        this._ensurePanelBackdrop();
+
         const overlay = this._panelProximityOverlay;
         const backdrop = this._panelBackdrop;
-        if (!overlay || overlay.destroyed)
-            return;
 
-        const isDark = this._isDarkColorScheme();
-        const configuredColor = this._settings?.get_string(isDark ? 'dark-bg-color' : 'light-bg-color') || '';
-        const color = String(configuredColor || bgCss || '').replace(/'/g, '').trim();
+        if (active) {
+            // Flip ownership BEFORE touching Main.panel classes.  The panel's
+            // notify::style handler is synchronous, so it can re-enter
+            // applyVibrancyStyle() while the class swap below is happening.
+            // If this flag is set afterwards, vibrancy can immediately reclaim
+            // the wallpaper layer and leave proximity visually missing.
+            const wasActive = this._panelProximityActive;
+            this._panelProximityActive = true;
 
-        if (!active || !color) {
-            this._panelProximityActive = false;
-            this._animateProximity(false, this._proximityPanelColor || color || 'rgb(0, 0, 0)');
-            this._proximityPanelColor = null;
+            const color = global.wack_proximity_bg || this._proximityPanelColor || 'rgb(0, 0, 0)';
+            // Configure the colour without forcing opacity to 255. The visual
+            // transition below must start from the actor's current opacity
+            // (normally 0 after Overview/lockscreen suppression), otherwise
+            // proximity would appear as a blip instead of fading in.
+            this._setProximityPanelColor(color);
+            if (overlay && !overlay.destroyed)
+                overlay.show();
+
+            // Repeated proximity observations are normal (especially during
+            // workspace switches and actor allocation). Once proximity owns
+            // the panel, do not restart the crossfade from scratch.
+            if (wasActive) {
+                if (onSettled) onSettled();
+                return;
+            }
+
+            // Proximity owns the panel surface while its transition settles:
+            // the wallpaper fades out as the solid proximity surface fades in.
+            if (backdrop && !backdrop.destroyed) {
+                if (this._panelStripPath)
+                    this._setPanelBackdropStyle(this._panelStripPath);
+                backdrop.show();
+            }
+            this._animatePanelVisualLayers(0, 255, onSettled);
             return;
         }
 
-        this._panelProximityActive = true;
-        this._proximityPanelColor = color;
-        this._allocatePanelBackdrop();
-
-        // The proximity actor is a direct sibling above the vibrancy surface
-        // and below the real panel content.
-        this._setProximityPanelColor(color, 0);
-        overlay.show();
-        if (backdrop && !backdrop.destroyed) {
-            backdrop.set_opacity(255);
-            backdrop.show();
+        if (!this._panelProximityActive) {
+            if (onSettled) onSettled();
+            return;
         }
 
-        console.debug(`[WACK/Vibrancy] proximity color layered above vibrancy: ${color}`);
-        this._animateProximity(true, color);
+        this._panelProximityActive = false;
+
+        const shouldRestoreVibrancy = this.vibrancyActive &&
+            !Main.overview.visibleTarget &&
+            !(Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows);
+
+        if (shouldRestoreVibrancy && this._panelStripPath)
+            this._setPanelBackdropStyle(this._panelStripPath);
+
+        this._animatePanelVisualLayers(shouldRestoreVibrancy ? 255 : 0, 0, () => {
+            if (shouldRestoreVibrancy)
+                this.applyVibrancyStyle();
+            if (onSettled) onSettled();
+        });
     }
 
     applyVibrancyStyle() {
+        // Suppression is a hard visual gate. Async wallpaper/color updates,
+        // Main.panel notify::style re-entry, and other callers may invoke this
+        // method while Overview/lockscreen is active; none of those paths may
+        // resurrect a WACK panel surface while the gate is set.
+        if (this._panelVisualsSuppressed) {
+            this._cancelProximityAnimation();
+            for (const actor of [this._panelBackdrop, this._panelBackdropOverlay, this._panelProximityOverlay]) {
+                if (actor && !actor.destroyed) {
+                    actor.remove_all_transitions();
+                    actor.set_opacity(0);
+                    actor.hide();
+                }
+            }
+            return;
+        }
+
         const enabled = this._settings.get_boolean('enable-vibrancy');
         const blurMode = this._settings.get_int('vibrancy-blur-mode');
         const style = this._settings.get_int('vibrancy-style');
@@ -959,9 +1185,9 @@ export default class VibrancyManager {
                     this._settingStyle = false;
                 }
                 this._vibrancyStyleActive = false;
-        this._proximityAnimationId = 0;
-        this._proximityAnimationToken = 0;
-        this._proximityPanelColor = null;
+                this._proximityAnimationId = 0;
+                this._proximityAnimationToken = 0;
+                this._proximityPanelColor = null;
             }
             return;
         }
@@ -969,6 +1195,16 @@ export default class VibrancyManager {
         const isDark = this._isDarkColorScheme();
         const isOverview = Main.overview.visibleTarget;
         const isLockscreen = Main.sessionMode.currentMode === 'unlock-dialog' && !Main.sessionMode.hasWindows;
+
+        // Proximity has its own sibling surface and transition coordinator.
+        // While it owns the panel, only update vibrancy's configuration; do
+        // not independently hide/show the wallpaper actor here. That would
+        // fight the V<->P crossfade and could resurrect vibrancy during a
+        // lockscreen/Overview suppression.
+        if (this._panelProximityActive) {
+            this._setPanelBackdropOverlayStyle(null);
+            return;
+        }
 
         const borrowVenturaLight = this._getBorrowVenturaLight();
         const useVenturaLight = (style === 2 || borrowVenturaLight) && !isDark;
@@ -1082,6 +1318,15 @@ export default class VibrancyManager {
         const isLockMode = Main.sessionMode.currentMode === 'unlock-dialog';
         const isShieldActive = Main.screenShield && (Main.screenShield.active || Main.screenShield.locked);
         const isOverviewActive = Main.overview.visible || Main.overview.visibleTarget;
+
+        // This is the single global last-known normal visual state. It is not
+        // workspace-scoped and it is deliberately updated only while the
+        // panel is actually allowed to display vibrancy. Overview/lockscreen
+        // suppression must not overwrite it with 'none'.
+        if (!isLockMode && !isShieldActive && !isOverviewActive &&
+            !this._panelProximityActive && this._panelStripPath) {
+            this._extension._lastPanelVisualState = 'vibrancy';
+        }
 
         if (!isLockMode && !isShieldActive && !isOverviewActive) {
             global.wack_panel_cached_classes = Main.panel.get_style_class_name() || '';
