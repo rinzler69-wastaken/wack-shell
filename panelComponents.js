@@ -550,7 +550,7 @@ export const WackLogoButton = GObject.registerClass(
                     }
                 }
             }
-            return super.vfunc_event(event);
+            return Clutter.EVENT_PROPAGATE;
         }
 
         _onScrollEvent(actor, event) {
@@ -1207,7 +1207,7 @@ export const WackWorkspaceButton = GObject.registerClass(
                     return Clutter.EVENT_STOP;
                 }
             }
-            return super.vfunc_event(event);
+            return Clutter.EVENT_PROPAGATE;
         }
 
         _onScrollEvent(actor, event) {
