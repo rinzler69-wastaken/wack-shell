@@ -910,11 +910,23 @@ export default class VibrancyManager {
         const color = String(configuredColor || bgCss || '').replace(/'/g, '').trim();
 
         if (!active || !color) {
+            // Already inactive: _animateProximity(false, ...) would first pop the
+            // overlay to full opacity and then fade it out, flashing the panel.
+            // This happens on every queued update (e.g. right after unlocking),
+            // so bail out unless there is really something to fade away.
+            if (!this._panelProximityActive)
+                return;
             this._panelProximityActive = false;
             this._animateProximity(false, this._proximityPanelColor || color || 'rgb(0, 0, 0)');
             this._proximityPanelColor = null;
             return;
         }
+
+        // Already showing exactly this colour - don't restart the crossfade.
+        if (this._panelProximityActive &&
+            this._proximityPanelColor === color &&
+            overlay.opacity === 255)
+            return;
 
         this._panelProximityActive = true;
         this._proximityPanelColor = color;
