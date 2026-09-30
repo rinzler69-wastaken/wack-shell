@@ -1449,11 +1449,17 @@ _disconnectDockSnapshotWatchers() {
         if (windowNearPanel) {
             this.lastPanelStateIsProximity = true;
             global.wack_proximity_active = true;
-            this._applyPanelStyle();
+            // Only run the (animated) style handoff on an actual state change.
+            // Window-allocation signals fire continuously while dragging, so an
+            // unconditional re-apply would restart the 250ms proximity crossfade
+            // every ~100ms and make the panel flicker.
+            if (!Main.panel.has_style_class_name('panel-proximity'))
+                this._applyPanelStyle();
         } else {
             this.lastPanelStateIsProximity = false;
             global.wack_proximity_active = false;
-            this._clearPanelStyle();
+            if (Main.panel.has_style_class_name('panel-proximity'))
+                this._clearPanelStyle();
         }
     }
 
